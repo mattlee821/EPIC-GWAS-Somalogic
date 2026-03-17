@@ -1,0 +1,56 @@
+# System and Logs
+.DS_Store
+.nextflow.log
+.nextflow*
+work/
+src/test/
+tools/
+
+# Configuration
+.env
+.env.local
+.env.*
+
+# Reports and Temp
+pipeline_summary.qmd
+pipeline_summary.html
+pipeline_summary_files/
+pipeline_summary_cache/
+temp/
+
+# GWAS Data Types (Binary and Large Text)
+*.pgen
+*.psam
+*.pvar
+*.bed
+*.bim
+*.fam
+*.bgen
+*.sample
+*.vcf
+*.vcf.gz
+*.vcf.bgz
+*.bfile
+*.tbi
+*.csi
+
+# GWAS Result Formats
+*.regenie
+*.regenie.gz
+*.metal
+*.metal.gz
+*.tbl
+*.tbl.gz
+*.sumstats
+*.sumstats.gz
+*.gwas.tsv.gz
+pipeline/samplesheet.csv
+
+# Plots and Aggregated Data
+*.tiff
+*.png
+*.pdf
+*.RData
+*.rds
+*.metrics.tsv
+*.metrics.csv

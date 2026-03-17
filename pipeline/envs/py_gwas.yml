@@ -1,0 +1,21 @@
+name: py_gwas
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - scipy
+  - matplotlib
+  - pyarrow
+  - r-base
+  - r-data.table
+  - r-knitr
+  - r-rmarkdown
+  - jupyter
+  - nbformat
+  - nbconvert
+  - papermill  
+  - ipykernel    
