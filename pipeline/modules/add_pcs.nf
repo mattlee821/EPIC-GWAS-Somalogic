@@ -4,7 +4,7 @@ process ADD_PCS {
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/003_prepare-covariates" }, mode: 'copy'
 
   input:
-  tuple val(study_id), val(group), path(cov_file), path(pcs_file), path(eval_file)
+  tuple val(study_id), val(group), path(cov_file, stageAs: 'covariates_in.cov'), path(pcs_file), path(eval_file)
 
   output:
   tuple val(study_id), val(group), path("covariates.cov")

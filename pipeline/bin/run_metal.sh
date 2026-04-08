@@ -29,18 +29,18 @@ fi
 IFS=',' read -ra FILES <<< "$input_files"
 input_list="${tmpdir}/metal_input.txt"
 
+# Pre-process inputs to ensure clean headers for METAL
 format_for_metal () {
   local infile="$1"
   local outfile="$2"
 
-  if [[ "$infile" == *.gz ]]; then
-    zcat "$infile" | awk 'BEGIN{OFS="\t"; FS="[ \t]+"}
+  if gzip -t "$infile" >/dev/null 2>&1; then
+    gzip -cd "$infile" | awk 'BEGIN{OFS="\t"; FS="[ \t]+"}
       {
         if ($0 ~ /^#/ || NF==0) next
         if (!header_done) {
           for(i=1;i<=NF;i++){
-            gsub(/"/,"",$i)
-            gsub(/\r/,"",$i)
+            gsub(/"/,"",$i); gsub(/\r/,"",$i)
             t=toupper($i); gsub(/[^A-Z0-9]/,"",t)
             if(t=="ID"||t=="MARKERNAME"||t=="SNP") id=i
             else if(t=="EA"||t=="ALLELE1"||t=="A1"||t=="EFFECTALLELE") ea=i
@@ -50,23 +50,23 @@ format_for_metal () {
             else if(t=="SE"||t=="STDERR"||t=="STANDARDERROR") se=i
             else if(t=="P"||t=="PVALUE"||t=="PVAL") p=i
             else if(t=="N"||t=="WEIGHT"||t=="TOTALSAMPLESIZE"||t=="NEFF") n=i
+            else if(t=="CHR"||t=="CHROM") chr=i
+            else if(t=="POS"||t=="POSITION"||t=="GENPOS") pos=i
           }
           if(id==0||ea==0||oa==0||eaf==0||beta==0||se==0||p==0){
             print "ERROR: Required columns missing in input for METAL" > "/dev/stderr"
             exit 2
           }
-          print "ID","EA","OA","EAF","BETA","SE","P","N"
+          print "ID","EA","OA","EAF","BETA","SE","P","N","CHR","POS"
           header_done=1
           next
         }
         nval = (n>0 ? $(n) : "1")
-        print $(id),$(ea),$(oa),$(eaf),$(beta),$(se),$(p),nval
-      }
-      END{
-        if(!header_done){
-          print "ERROR: Required columns missing in input for METAL" > "/dev/stderr"
-          exit 2
-        }
+        chrval = (chr>0 ? $(chr) : "")
+        posval = (pos>0 ? $(pos) : "")
+        # Remove "chr" prefix if present
+        gsub(/^[Cc][Hh][Rr]/, "", chrval)
+        print $(id),$(ea),$(oa),$(eaf),$(beta),$(se),$(p),nval,chrval,posval
       }' > "$outfile"
   else
     awk 'BEGIN{OFS="\t"; FS="[ \t]+"}
@@ -74,8 +74,7 @@ format_for_metal () {
         if ($0 ~ /^#/ || NF==0) next
         if (!header_done) {
           for(i=1;i<=NF;i++){
-            gsub(/"/,"",$i)
-            gsub(/\r/,"",$i)
+            gsub(/"/,"",$i); gsub(/\r/,"",$i)
             t=toupper($i); gsub(/[^A-Z0-9]/,"",t)
             if(t=="ID"||t=="MARKERNAME"||t=="SNP") id=i
             else if(t=="EA"||t=="ALLELE1"||t=="A1"||t=="EFFECTALLELE") ea=i
@@ -85,28 +84,26 @@ format_for_metal () {
             else if(t=="SE"||t=="STDERR"||t=="STANDARDERROR") se=i
             else if(t=="P"||t=="PVALUE"||t=="PVAL") p=i
             else if(t=="N"||t=="WEIGHT"||t=="TOTALSAMPLESIZE"||t=="NEFF") n=i
+            else if(t=="CHR"||t=="CHROM") chr=i
+            else if(t=="POS"||t=="POSITION"||t=="GENPOS") pos=i
           }
           if(id==0||ea==0||oa==0||eaf==0||beta==0||se==0||p==0){
             print "ERROR: Required columns missing in input for METAL" > "/dev/stderr"
             exit 2
           }
-          print "ID","EA","OA","EAF","BETA","SE","P","N"
+          print "ID","EA","OA","EAF","BETA","SE","P","N","CHR","POS"
           header_done=1
           next
         }
         nval = (n>0 ? $(n) : "1")
-        print $(id),$(ea),$(oa),$(eaf),$(beta),$(se),$(p),nval
-      }
-      END{
-        if(!header_done){
-          print "ERROR: Required columns missing in input for METAL" > "/dev/stderr"
-          exit 2
-        }
+        chrval = (chr>0 ? $(chr) : "")
+        posval = (pos>0 ? $(pos) : "")
+        gsub(/^[Cc][Hh][Rr]/, "", chrval)
+        print $(id),$(ea),$(oa),$(eaf),$(beta),$(se),$(p),nval,chrval,posval
       }' "$infile" > "$outfile"
   fi
 }
 
-# Prepare plain-text files for METAL
 for i in "${!FILES[@]}"; do
   f="${FILES[$i]}"
   bn=$(basename "$f")
@@ -117,11 +114,15 @@ done
 
 metal_script="${tmpdir}/metal_script.txt"
 cat > "$metal_script" <<EOF
+# TRACKPOSITIONS ON ensures METAL correctly tracks and outputs Chromosome/Position
+TRACKPOSITIONS ON
 SCHEME STDERR
 AVERAGEFREQ ON
 MINMAXFREQ ON
+# TotalSampleSize setup
 CUSTOMVARIABLE TotalSampleSize
 LABEL TotalSampleSize as N
+# Required mappings
 MARKER ID
 ALLELE EA OA
 EFFECT BETA
@@ -129,6 +130,9 @@ STDERR SE
 PVALUE P
 WEIGHT N
 FREQ EAF
+# Native Coordinate Tracking
+CHROMOSOMELABEL CHR
+POSITIONLABEL POS
 EOF
 
 while read -r f; do
@@ -152,87 +156,53 @@ fi
 
 if [[ -n "$tbl_file" ]]; then
   stem="${tbl_file%.tbl}"
-  info_file="${stem}.tbl.info"
-
-  if [[ "$tbl_file" != "${outdir}/meta.tbl" ]]; then
-    mv -f "$tbl_file" "${outdir}/meta.tbl"
-  fi
-  if [[ -f "$info_file" ]]; then
-    mv -f "$info_file" "${outdir}/meta.tbl.info"
+  # Ensure the .info file is correctly named
+  if [[ -f "${stem}.tbl.info" && "${stem}.tbl.info" != "${outdir}/meta.tbl.info" ]]; then
+      mv -f "${stem}.tbl.info" "${outdir}/meta.tbl.info"
   fi
 
-  # Standardize output columns so METAL outputs can be re-used as inputs
-  # Log first non-empty line to aid debugging
-  awk 'NF>0 && $0 !~ /^#/ {print "META_HEADER_LINE: " $0; exit}' "${outdir}/meta.tbl" >> "${outdir}/meta.log" || true
-
-  if awk 'BEGIN{OFS="\t"; FS="[ \t]+"}
+  # Final Standardization Step (Mapping Chromosome/Position columns)
+  awk 'BEGIN{OFS="\t"; FS="[ \t]+"}
   {
     if ($0 ~ /^#/ || NF==0) next
     if (!header_done) {
       for(i=1;i<=NF;i++){
-        gsub(/"/,"",$i)
-        gsub(/\r/,"",$i)
+        gsub(/"/,"",$i); gsub(/\r/,"",$i)
         t=toupper($i); gsub(/[^A-Z0-9]/,"",t)
-        if(t=="MARKERNAME"||t=="ID"||t=="SNP") id=i
-        else if(t=="ALLELE1"||t=="EA"||t=="A1"||t=="EFFECTALLELE") ea=i
-        else if(t=="ALLELE2"||t=="OA"||t=="A2"||t=="OTHERALLELE") oa=i
-        else if(t=="FREQ1"||t=="EAF"||t=="A1FREQ"||t=="FREQ"||t=="FREQA1") eaf=i
-        else if(t=="EFFECT"||t=="BETA") beta=i
-        else if(t=="STDERR"||t=="SE"||t=="STANDARDERROR") se=i
-        else if(t=="PVALUE"||t=="P"||t=="PVAL") p=i
-        else if(t=="WEIGHT"||t=="N"||t=="TOTALSAMPLESIZE"||t=="NEFF") n=i
+        if(t=="MARKERNAME"||t=="ID"||t=="SNP") id_idx=i
+        else if(t=="ALLELE1"||t=="EA"||t=="A1"||t=="EFFECTALLELE") ea_idx=i
+        else if(t=="ALLELE2"||t=="OA"||t=="A2"||t=="OTHERALLELE") oa_idx=i
+        else if(t=="FREQ1"||t=="EAF"||t=="A1FREQ"||t=="FREQ"||t=="FREQA1") eaf_idx=i
+        else if(t=="EFFECT"||t=="BETA") beta_idx=i
+        else if(t=="STDERR"||t=="SE"||t=="STANDARDERROR") se_idx=i
+        else if(t=="PVALUE"||t=="P"||t=="PVAL") p_idx=i
+        else if(t=="WEIGHT"||t=="N"||t=="TOTALSAMPLESIZE"||t=="NEFF") n_idx=i
+        else if(t=="CHROMOSOME"||t=="CHR") chr_idx=i
+        else if(t=="POSITION"||t=="POS") pos_idx=i
       }
-      if(id==0||ea==0||oa==0||eaf==0||beta==0||se==0||p==0){
-        print "ERROR: Required columns missing in METAL output" > "/dev/stderr"
-        exit 2
-      }
-      print "ID","EA","OA","EAF","BETA","SE","P","N"
+      print "ID","EA","OA","EAF","BETA","SE","P","N","CHR","POS"
       header_done=1
       next
     }
-    nval = (n>0 ? $(n) : "1")
-    print $(id),$(ea),$(oa),$(eaf),$(beta),$(se),$(p),nval
-  }
-  END{
-    if(!header_done){
-      print "ERROR: Required columns missing in METAL output" > "/dev/stderr"
-      exit 2
+    # Fetch result variables
+    nval = (n_idx>0 ? $(n_idx) : "1")
+    chrval = (chr_idx>0 ? $(chr_idx) : "")
+    posval = (pos_idx>0 ? $(pos_idx) : "")
+    
+    # Fallback to string split if somehow coordinates are missing
+    if(chrval=="" || posval==""){
+        split($(id_idx), a, /[_:]/)
+        if(chrval=="") chrval=a[1]
+        if(posval=="") posval=a[2]
     }
-  }' \
-  "${outdir}/meta.tbl" > "${outdir}/meta.tbl.std"; then
-    mv -f "${outdir}/meta.tbl.std" "${outdir}/meta.tbl"
-  else
-    echo "WARN: Could not standardize METAL output columns; keeping original meta.tbl" >> "${outdir}/meta.log"
-    rm -f "${outdir}/meta.tbl.std"
-  fi
-
-  if [[ ! -f "${outdir}/meta.tbl.info" ]]; then
-    echo "WARN: meta.tbl.info missing" >> "${outdir}/meta.log"
-    touch "${outdir}/meta.tbl.info"
-  fi
-
+    gsub(/^[Cc][Hh][Rr]/, "", chrval)
+    print $(id_idx),$(ea_idx),$(oa_idx),$(eaf_idx),$(beta_idx),$(se_idx),$(p_idx),nval,chrval,posval
+  }' "$tbl_file" > "${outdir}/meta.tbl.std"
+  
+  mv -f "${outdir}/meta.tbl.std" "${outdir}/meta.tbl"
   gzip -f "${outdir}/meta.tbl"
 fi
 
-if [[ ! -f "${outdir}/meta.tbl.gz" ]]; then
-  echo "ERROR: METAL did not produce expected output files. Log:" >> "${outdir}/meta.log"
-  cat "${outdir}/meta.log"
-  exit 1
-fi
-
-# Cleanup: keep only meta.tbl.gz, meta.tbl.info, meta.log
-for f in "${outdir}"/*; do
-  base="$(basename "$f")"
-  case "$base" in
-    meta.tbl.gz|meta.tbl.info|meta.log) ;;
-    *)
-      if [[ -d "$f" ]]; then
-        rm -rf "$f"
-      else
-        rm -f "$f"
-      fi
-      ;;
-  esac
-done
-
+# Cleanup
 rm -rf "$tmpdir"
+echo "METAL for $protein_id ($group) complete."

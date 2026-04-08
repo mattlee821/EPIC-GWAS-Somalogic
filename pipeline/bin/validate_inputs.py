@@ -89,43 +89,48 @@ def main():
         # 4. Covariate Header (Fallback to phenotype file if covariates.txt doesn't exist)
         cov_source = args.covariate_file if os.path.exists(args.covariate_file) else args.phenotype_file
         
-        with open(cov_source, "r") as cf:
-            line = cf.readline().strip()
-            cov_header = line.split("\t") if "\t" in line else line.split(",")
-            
-            if args.covariates:
-                req_covs = [x.strip() for x in args.covariates.split(",")]
-                missing_covs = [c for c in req_covs if c not in cov_header]
-                if missing_covs:
-                    f.write(f"FAIL: Missing requested covariates: {', '.join(missing_covs)}\n")
-                    error_found = True
+        if os.path.exists(cov_source):
+            with open(cov_source, "r") as cf:
+                line = cf.readline().strip()
+                cov_header = line.split("\t") if "\t" in line else line.split(",")
+                
+                if args.covariates:
+                    req_covs = [x.strip() for x in args.covariates.split(",")]
+                    missing_covs = [c for c in req_covs if c not in cov_header]
+                    if missing_covs:
+                        f.write(f"FAIL: Missing requested covariates: {', '.join(missing_covs)}\n")
+                        error_found = True
+        else:
+            f.write(f"FAIL: Covariate source '{cov_source}' not found.\n")
+            error_found = True
+            cov_header = []
 
-            for s in studies:
-                if req_studies and s['study_id'] not in req_studies:
-                    continue
+        for s in studies:
+            if req_studies and s['study_id'] not in req_studies:
+                continue
 
-                # Only check group_column if it's actually specified in samplesheet
-                gcol = s.get('group_column', '').strip()
-                if not gcol:
-                    continue
+            # Only check group_column if it's actually specified in samplesheet
+            gcol = s.get('group_column', '').strip()
+            if not gcol:
+                continue
 
-                in_cov = gcol in cov_header
-                in_sample = False
-                sample_file = s.get('sample_file', '')
-                if sample_file and os.path.exists(sample_file):
-                    if sample_file.endswith((".fam", ".sam")):
-                        sample_header = ["FID", "IID", "PID", "MID", "SEX", "PHENO"]
+            in_cov = gcol in cov_header
+            in_sample = False
+            sample_file = s.get('sample_file', '')
+            if sample_file and os.path.exists(sample_file):
+                if sample_file.endswith((".fam", ".sam")):
+                    sample_header = ["FID", "IID", "PID", "MID", "SEX", "PHENO"]
+                    if gcol in sample_header:
+                        in_sample = True
+                else:
+                    with open(sample_file, "r") as sf:
+                        sample_header = sf.readline().strip().split()
                         if gcol in sample_header:
                             in_sample = True
-                    else:
-                        with open(sample_file, "r") as sf:
-                            sample_header = sf.readline().strip().split()
-                            if gcol in sample_header:
-                                in_sample = True
 
-                if not in_cov and not in_sample:
-                    f.write(f"FAIL: Group column '{gcol}' missing for {s['study_id']} (covariate/sample files)\n")
-                    error_found = True
+            if not in_cov and not in_sample:
+                f.write(f"FAIL: Group column '{gcol}' missing for {s['study_id']} (covariate/sample files)\n")
+                error_found = True
         
         if error_found:
             f.write("Validation finished with ERRORS.\n")

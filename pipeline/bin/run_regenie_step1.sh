@@ -27,6 +27,12 @@ mkdir -p "${outdir}/tmp"
 
 log_file="${outdir}/step1.log"
 
+{
+  echo "COVARIATE FILE PREVIEW (first 2 lines):"
+  head -n 2 "${cov_file}" 2>/dev/null || echo "WARNING: failed to read covariate file '${cov_file}'"
+  echo ""
+} > "$log_file"
+
 if ! regenie \
   --step 1 \
   --bed "${step1_bfile}" \
@@ -38,7 +44,7 @@ if ! regenie \
   --threads 8 \
   --gz \
   --force-step1 \
-  --out "${outdir}/step1" > "$log_file" 2>&1; then
+  --out "${outdir}/step1" >> "$log_file" 2>&1; then
     echo "ERROR: REGENIE Step 1 failed. Log follows:"
     cat "$log_file"
     exit 1

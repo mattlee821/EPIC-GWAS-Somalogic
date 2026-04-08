@@ -17,17 +17,20 @@ dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
 
 # 1. Load data
 covs <- fread(opt$cov_file)
-pcs <- fread(opt$pcs_file, header = FALSE)
+pcs <- fread(opt$pcs_file)
 
-# Format PC file
-if (ncol(pcs) >= 12) {
-  setnames(pcs, c("FID", "IID", paste0("PC", 1:(ncol(pcs)-2))))
-} else {
-  # If header exists, try reading with header
-  pcs <- fread(opt$pcs_file)
-  if (!all(c("FID", "IID") %in% colnames(pcs))) {
-    stop("PC file missing FID/IID columns.")
+# Format PC file (plink2 pca.eigenvec often uses '#FID' as first header)
+if ("#FID" %in% colnames(pcs) && !"FID" %in% colnames(pcs)) {
+  setnames(pcs, "#FID", "FID")
+}
+
+# If headerless, fall back and create names
+if (!all(c("FID", "IID") %in% colnames(pcs))) {
+  pcs <- fread(opt$pcs_file, header = FALSE)
+  if (ncol(pcs) < 3) {
+    stop("PC file has too few columns (expected FID IID PC1 ...).")
   }
+  setnames(pcs, c("FID", "IID", paste0("PC", 1:(ncol(pcs) - 2))))
 }
 
 covs[, FID := as.character(FID)]
@@ -37,6 +40,14 @@ pcs[, IID := as.character(IID)]
 
 # 2. Merge
 merged <- merge(covs, pcs, by = c("FID", "IID"), all.x = TRUE, sort = FALSE)
+
+# Ensure covariate column names are safe for downstream tools (keep FID/IID intact)
+id_cols <- c("FID", "IID")
+other_cols <- setdiff(colnames(merged), id_cols)
+if (length(other_cols) > 0) {
+  safe_other <- make.names(other_cols, unique = TRUE)
+  setnames(merged, old = other_cols, new = safe_other)
+}
 
 out_file <- file.path(opt$outdir, "covariates.cov")
 fwrite(merged, out_file, sep = "\t", quote = FALSE, na = "NA")

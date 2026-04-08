@@ -4,10 +4,10 @@ process PREPARE_PHENOTYPES {
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/002_prepare-phenotypes" }, mode: 'copy'
 
   input:
-  tuple val(study_id), val(group), path(phenotype_file, stageAs: 'phenotype_input.txt'), path(sample_file), path(covariate_file, stageAs: 'covariate_input.txt'), val(group_column), val(cases_value), val(include_proteins), val(chunk_size), val(covariates)
+  tuple val(study_id), val(group), path(phenotype_file, stageAs: 'phenotype_input.txt'), path(sample_file), path(covariate_file, stageAs: 'covariate_input.txt'), val(group_column), val(cases_value), val(include_proteins), val(covariates)
 
   output:
-  tuple val(study_id), val(group), path("chunk_*.pheno", optional: true), path("full.pheno"), path("chunks.manifest"), path("keep_samples.txt")
+  tuple val(study_id), val(group), path("full.pheno"), path("keep_samples.txt")
   path "protein_summary.tsv"
 
   script:
@@ -22,7 +22,7 @@ process PREPARE_PHENOTYPES {
     --covariate_file covariate_input.txt \\
     --covariates "${covariates}" \\
     --include_proteins "${include_proteins}" \\
-    --chunk_size ${chunk_size} \\
     --outdir .
   """
+
 }

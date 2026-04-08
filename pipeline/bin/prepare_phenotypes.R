@@ -11,9 +11,9 @@ option_list = list(
   make_option(c("--covariate_file"), type="character"),
   make_option(c("--covariates"), type="character", default=""),
   make_option(c("--include_proteins"), type="character", default=""),
-  make_option(c("--chunk_size"), type="integer", default=100),
   make_option(c("--outdir"), type="character")
 )
+
 
 opt_parser = OptionParser(option_list=option_list)
 opt = parse_args(opt_parser)
@@ -125,39 +125,8 @@ data.table::fwrite(pheno, full_out, sep="\t", quote=FALSE, na="NA")
 keep_out <- file.path(opt$outdir, "keep_samples.txt")
 data.table::fwrite(pheno[, .(FID, IID)], keep_out, sep="\t", col.names=FALSE, quote=FALSE)
 
-# Chunking
-prot_cols <- setdiff(colnames(pheno), c("FID", "IID"))
-n_prots <- length(prot_cols)
-
-# Force per-protein chunks when multiple proteins are requested to preserve protein-level outputs
-effective_chunk_size <- opt$chunk_size
-if (n_prots > 1 && opt$chunk_size > 1) {
-  effective_chunk_size <- 1
-  message("INFO: Multiple proteins detected; forcing chunk_size=1 to ensure per-protein outputs.")
-}
-
-n_chunks <- ceiling(n_prots / effective_chunk_size)
-manifest_data <- data.frame(chunk_id=character(), pheno_file=character(), proteins=character(), stringsAsFactors=FALSE)
-for (i in seq_len(n_chunks)) {
-  start_idx <- (i - 1) * effective_chunk_size + 1
-  end_idx <- min(i * effective_chunk_size, n_prots)
-  chunk_prots <- prot_cols[start_idx:end_idx]
-  chunk_data <- pheno[, c("FID", "IID", chunk_prots), with=FALSE]
-  chunk_id_str <- sprintf("chunk_%03d", i)
-  chunk_file <- file.path(opt$outdir, paste0(chunk_id_str, ".pheno"))
-  data.table::fwrite(chunk_data, chunk_file, sep="\t", quote=FALSE, na="NA")
-  manifest_data <- rbind(
-    manifest_data,
-    data.frame(
-      chunk_id=chunk_id_str,
-      pheno_file=normalizePath(chunk_file),
-      proteins=paste(chunk_prots, collapse=",")
-    )
-  )
-}
-data.table::fwrite(manifest_data, file.path(opt$outdir, "chunks.manifest"), sep="\t", quote=FALSE)
-
 # 5. Summary statistics for proteins
+prot_cols <- setdiff(colnames(pheno), c("FID", "IID"))
 summary_list <- list()
 for (p in prot_cols) {
   vals <- pheno[[p]]

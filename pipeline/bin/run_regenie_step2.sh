@@ -9,7 +9,6 @@ cov_file=""
 pred_list=""
 study=""
 group=""
-chunk_id=""
 chr=""
 bsize=""
 outdir=""
@@ -24,7 +23,6 @@ while [[ $# -gt 0 ]]; do
     --pred_list) pred_list="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
     --group) group="$2"; shift 2 ;;
-    --chunk_id) chunk_id="$2"; shift 2 ;;
     --chr) chr="$2"; shift 2 ;;
     --bsize) bsize="$2"; shift 2 ;;
     --outdir) outdir="$2"; shift 2 ;;
@@ -33,10 +31,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$outdir"
-log_file="${outdir}/step2_${chunk_id}_chr${chr}.log"
+log_file="${outdir}/step2_chr${chr}.log"
+
+# Default to Nextflow-provided CPU count when available (e.g., NXF_TASK_CPUS).
+# Fall back to SLURM_CPUS_PER_TASK, then 2 for manual runs.
+threads="${NXF_TASK_CPUS:-${SLURM_CPUS_PER_TASK:-2}}"
 
 # Build REGENIE command
-CMD="regenie --step 2 --threads 8"
+CMD="regenie --step 2 --threads ${threads}"
 
 if [[ -n "$pgen_prefix" ]]; then
     
@@ -79,7 +81,7 @@ CMD+=" --pred ${pred_list}"
 CMD+=" --chr ${chr}"
 CMD+=" --bsize ${bsize}"
 CMD+=" --qt --gz"
-CMD+=" --out ${outdir}/${chunk_id}_chr${chr}"
+CMD+=" --out ${outdir}/full_chr${chr}"
 
 echo "Running: $CMD"
 if ! eval "$CMD" > "$log_file" 2>&1; then
@@ -88,4 +90,4 @@ if ! eval "$CMD" > "$log_file" 2>&1; then
     exit 1
 fi
 
-echo "REGENIE Step 2 for $study ($group) $chunk_id chr$chr complete."
+echo "REGENIE Step 2 for $study ($group) chr$chr complete."

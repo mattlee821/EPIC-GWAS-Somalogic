@@ -10,10 +10,10 @@ include_proteins:  ""          # comma-separated list of protein column names, o
 covariates:        ""          # comma-separated list of covariates (e.g. Age_Recr,Sex), or "" for all non-IID/FID columns
 
 # --- Analysis groups ---
-analysis_groups:   ["combined", "cases", "controls"]
+analysis_groups:   ["cases", "controls"]
 
-# --- Chunking ---
-chunk_size:        100         # proteins per REGENIE Step 2 job; use 3 for testing
+# --- Deprecated chunk settings (kept for CLI compatibility; ignored by pipeline_v2) ---
+chunk_size:        100
 
 # --- QC thresholds ---
 maf:               0.01

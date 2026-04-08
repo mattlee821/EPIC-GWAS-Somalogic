@@ -4,17 +4,17 @@ process COHORT_SUMMARY {
   publishDir   "${params.outdir}", mode: 'copy'
 
   input:
-  val metrics_files
+  path metrics_list
 
   output:
   path "all_metrics.tsv"
   path("lambda_gc_distribution.png", optional: true)
 
   script:
-  def metrics_arg = metrics_files.join(',')
   """
   Rscript ${projectDir}/bin/generate_cohort_summary.R \\
-    --metrics_files "${metrics_arg}" \\
+    --metrics_list ${metrics_list} \\
     --outdir .
   """
+
 }

@@ -22,4 +22,5 @@ process REGENIE_STEP1 {
     --bsize ${bsize} \\
     --outdir .
   """
+
 }

@@ -1,16 +1,16 @@
-process META_GROUP {
+process META_STUDY {
   label        'medium'
   // uses system-installed METAL binary (tools/metal/metal)
   publishDir   {
     def pid = (protein_ids instanceof java.util.Collection && protein_ids) ? protein_ids[0] : protein_ids
-    "${params.outdir}/${study_id}/${pid}/meta/010_METAL"
+    "${params.outdir}/meta/${pid}/${group}/012_METAL"
   }, mode: 'copy'
 
   input:
-  tuple val(study_id), val(protein_ids), val(sumstats_files), val(mapping)
+  tuple val(group), val(protein_ids), val(sumstats_files), val(mapping)
 
   output:
-  tuple val(study_id), val(protein_ids), path("meta.tbl.gz"), path("meta.tbl.info"), path("meta.log"), emit: all_out
+  tuple val("meta_study"), val(group), val(protein_ids), path("meta.tbl.gz"), path("meta.tbl.info"), path("meta.log"), emit: all_out
   path "meta.tbl.gz", emit: meta_files
 
   script:
@@ -21,7 +21,7 @@ process META_GROUP {
     bash ${projectDir}/bin/run_metal.sh \\
       --input_files "\${files}" \\
       --protein_id "\${prot}" \\
-      --group meta \\
+      --group "${group}" \\
       --metal_binary "${metal_bin}" \\
       --outdir .
   done < mapping.txt

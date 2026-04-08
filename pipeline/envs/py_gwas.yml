@@ -10,12 +10,4 @@ dependencies:
   - scipy
   - matplotlib
   - pyarrow
-  - r-base
-  - r-data.table
-  - r-knitr
-  - r-rmarkdown
-  - jupyter
-  - nbformat
-  - nbconvert
-  - papermill  
-  - ipykernel    
+  - polars
