@@ -1,5 +1,7 @@
 # System and Logs
 .DS_Store
+__pycache__/
+*.pyc
 .nextflow.log
 .nextflow*
 work/

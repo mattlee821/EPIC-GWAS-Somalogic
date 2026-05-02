@@ -65,28 +65,65 @@ plink2 $plink_flag "$bfile" \
   --het \
   --out "${outdir}/het"
 
-# Use R for robust filtering (better than awk for variable columns)
+# Use Python to avoid an extra R/data.table dependency in the PLINK env
 echo "Filtering heterozygosity outliers (mean +/- 3SD)..."
-Rscript - <<EOF
-library(data.table)
-het <- fread("${outdir}/het.het")
-# Find F column dynamically
-f_col <- grep("^F$", colnames(het), value=TRUE)
-if(length(f_col) == 0) f_col <- colnames(het)[ncol(het)] # fallback to last col
+python - <<EOF
+import csv
+import math
+from pathlib import Path
 
-f_vals <- het[[f_col]]
-m <- mean(f_vals, na.rm=TRUE)
-s <- sd(f_vals, na.rm=TRUE)
-lower <- m - 3*s
-upper <- m + 3*s
+het_path = Path("${outdir}/het.het")
+out_path = Path("${outdir}/het_pass.txt")
 
-cat(sprintf("F-coeff mean: %.4f, SD: %.4f\n", m, s))
-cat(sprintf("Keep range: [%.4f, %.4f]\n", lower, upper))
+with het_path.open() as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    rows = list(reader)
 
-# Identify ID column (IID or #IID)
-id_col <- grep("IID", colnames(het), value=TRUE)[1]
-pass_ids <- het[get(f_col) >= lower & get(f_col) <= upper, ..id_col]
-fwrite(pass_ids, "${outdir}/het_pass.txt", col.names=FALSE, sep="\t")
+if not rows:
+    raise SystemExit("No rows found in het.het")
+
+fieldnames = rows[0].keys()
+f_col = "F" if "F" in fieldnames else list(fieldnames)[-1]
+iid_col = next((col for col in fieldnames if col.upper().endswith("IID")), None)
+fid_col = next((col for col in fieldnames if col.upper().endswith("FID")), None)
+
+if iid_col is None:
+    raise SystemExit("Could not find IID column in het.het")
+
+f_vals = []
+for row in rows:
+    value = row.get(f_col, "")
+    if value not in ("", "NA", "nan", "NaN"):
+        f_vals.append(float(value))
+
+if not f_vals:
+    raise SystemExit("No valid F values found in het.het")
+
+mean_f = sum(f_vals) / len(f_vals)
+if len(f_vals) > 1:
+    variance = sum((value - mean_f) ** 2 for value in f_vals) / (len(f_vals) - 1)
+    sd_f = math.sqrt(variance)
+else:
+    sd_f = 0.0
+
+lower = mean_f - 3 * sd_f
+upper = mean_f + 3 * sd_f
+
+print(f"F-coeff mean: {mean_f:.4f}, SD: {sd_f:.4f}")
+print(f"Keep range: [{lower:.4f}, {upper:.4f}]")
+
+with out_path.open("w", newline="") as handle:
+    writer = csv.writer(handle, delimiter="\t")
+    for row in rows:
+        value = row.get(f_col, "")
+        if value in ("", "NA", "nan", "NaN"):
+            continue
+        f_value = float(value)
+        if lower <= f_value <= upper:
+            if fid_col:
+                writer.writerow([row[fid_col], row[iid_col]])
+            else:
+                writer.writerow([row[iid_col]])
 EOF
 
 # Step 3: King cutoff

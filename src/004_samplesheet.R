@@ -1,16 +1,68 @@
 #!/usr/bin/env Rscript
-# Script: src/003_samplesheet.R
+# Script: src/004_samplesheet.R
 # Purpose: Automatically generate the samplesheet.csv for the Nextflow GWAS pipeline
 # based on the layout of genetics datasets and the main phenotype file.
 
 # Adhere to USER coding rules: explicit package calls, use base R |>
 
 library(optparse)
-source("pipeline/bin/config.R")
+
+load_dot_env <- function(env_file = ".env") {
+  if (file.exists(env_file)) {
+    lines <- readLines(env_file, warn = FALSE)
+    lines <- lines[!grepl("^\\s*(#|$)", lines)]
+    for (line in lines) {
+      parts <- strsplit(line, "=")[[1]]
+      if (length(parts) >= 2) {
+        key <- trimws(parts[1])
+        value <- trimws(paste(parts[-1], collapse = "="))
+        value <- gsub("^['\"]|['\"]$", "", value)
+        env_list <- list(value)
+        names(env_list) <- key
+        do.call(Sys.setenv, env_list)
+      }
+    }
+  }
+}
+
+project_root <- Sys.getenv("GWAS_PROJECT_ROOT")
+search_paths <- c(
+  if (project_root != "") project_root else NULL,
+  ".",
+  "..",
+  "../.."
+)
+
+for (p in search_paths) {
+  env_p <- file.path(p, ".env")
+  if (file.exists(env_p)) {
+    load_dot_env(env_p)
+    break
+  }
+}
+
+get_env <- function(key, default = NULL) {
+  val <- Sys.getenv(key)
+  if (val == "") return(default)
+  return(val)
+}
+
+read_sample_header <- function(sample_file) {
+  hdr_lines <- readLines(sample_file, warn = FALSE)
+  hdr_lines <- hdr_lines[!grepl("^\\s*$", hdr_lines)]
+  hdr_lines <- hdr_lines[!grepl("^##", hdr_lines)]
+
+  if (length(hdr_lines) == 0) {
+    return(character())
+  }
+
+  hdr <- gsub("^#", "", hdr_lines[1])
+  strsplit(trimws(hdr), "\\s+")[[1]]
+}
 
 option_list <- list(
   make_option(c("--pheno_file"), type="character", 
-              default=get_env("GWAS_PHENO_FILE", "data/phenotype/phenofile-test.txt"),
+              default=get_env("GWAS_PHENO_FILE", "data/phenotype/phenofile.txt"),
               help="Path to the master phenotype text file"),
   make_option(c("--genetics_dir"), type="character", 
               default=get_env("GWAS_GENETICS_DIR", "data/genetics"),
@@ -99,10 +151,14 @@ for (study in unique_studies) {
                     }
                 } else if (grepl("\\.psam$", sample_file)) {
                     if (file.exists(sample_file)) {
-                        hdr <- readLines(sample_file, n=1)
-                        hdr <- gsub("^#", "", hdr)
-                        hdr_cols <- strsplit(hdr, "\\s+")[[1]]
-                        if (!(group_col_use %in% hdr_cols)) {
+                        hdr_cols <- read_sample_header(sample_file)
+                        group_col_found <- group_col_use %in% hdr_cols
+
+                        if (!group_col_found && identical(group_col_use, "PHENO") && "PHENO1" %in% hdr_cols) {
+                            group_col_found <- TRUE
+                        }
+
+                        if (!group_col_found) {
                             cat("WARNING: group_col '", group_col_use, "' not found in ", sample_file, ". Disabling split.\n", sep="")
                             group_col_use <- ""
                         }

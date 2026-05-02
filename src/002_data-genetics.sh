@@ -1,4 +1,6 @@
 #!/bin/bash
+# Script: src/002_data-genetics.sh
+# Purpose: Copy documented genetics inputs into the project data layout.
 
 # Robust environment sourcing
 for env_file in ".env" "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.env"; do

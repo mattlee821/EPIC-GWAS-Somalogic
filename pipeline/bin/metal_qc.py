@@ -23,24 +23,37 @@ def calculate_lambda(p_values):
 def main():
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
-    
-    # Use Polars for fast loading
-    # METAL default is tab-delimited
-    df = pl.read_csv(args.input_file, separator="\t", ignore_errors=True)
-    
-    # METAL typically uses MarkerName, P-value, Weight
+
     mapping = {
-        "MarkerName": "ID", 
-        "Allele1": "EA", 
-        "Allele2": "OA", 
-        "Freq1": "EAF", 
-        "Effect": "BETA", 
-        "StdErr": "SE", 
-        "P-value": "P", 
-        "Weight": "N"
+        "MarkerName": "ID",
+        "Allele1": "EA",
+        "Allele2": "OA",
+        "Freq1": "EAF",
+        "Effect": "BETA",
+        "StdErr": "SE",
+        "P-value": "P",
+        "Weight": "N",
+        "Chromosome": "CHR",
+        "Position": "POS",
+        "CHROMOSOME": "CHR",
+        "POSITION": "POS",
     }
-    
+
+    # Read the raw METAL output or an already-standardized table, then keep only
+    # the columns needed for final output and QC metrics.
+    df = pl.read_csv(args.input_file, separator="\t", ignore_errors=True)
     df = df.rename({old: new for old, new in mapping.items() if old in df.columns})
+    keep_cols = ["CHR", "POS", "ID", "EA", "OA", "EAF", "BETA", "SE", "P", "N"]
+    df = df.select([c for c in keep_cols if c in df.columns])
+
+    cast_exprs = []
+    for col in ("P", "N", "EAF", "BETA", "SE"):
+        if col in df.columns:
+            cast_exprs.append(pl.col(col).cast(pl.Float64, strict=False))
+    if "POS" in df.columns:
+        cast_exprs.append(pl.col("POS").cast(pl.Int64, strict=False))
+    if cast_exprs:
+        df = df.with_columns(cast_exprs)
 
     # Ensure CHR and POS columns are present and correctly handled
     needs_split = False
@@ -50,10 +63,9 @@ def main():
         needs_split = True
 
     if needs_split and "ID" in df.columns:
-        # Standardizing to underscores for parsing components 1 and 2
-        id_clean = df["ID"].str.replace(":", "_")
+        id_clean = df["ID"].cast(pl.Utf8).str.replace(":", "_")
         id_parts = id_clean.str.split("_")
-        
+
         new_cols = []
         if "CHR" not in df.columns:
             new_cols.append(id_parts.list.get(0).str.replace("(?i)chr", "").alias("CHR"))
@@ -76,11 +88,9 @@ def main():
         
         df = df.with_columns(new_cols)
     else:
-        # Standard cast to avoid errors even if splitting isn't needed
         if "CHR" in df.columns:
             df = df.with_columns(pl.col("CHR").cast(pl.Utf8).str.replace("(?i)chr", ""))
 
-    # Ensure EA and OA are capitalized as requested
     if "EA" in df.columns:
         df = df.with_columns(pl.col("EA").str.to_uppercase())
     if "OA" in df.columns:
@@ -99,25 +109,23 @@ def main():
     
     l_filt = calculate_lambda(df_filt["P"])
 
-    # Strictly enforce the output column order as requested by user
     standard_cols = ["CHR", "POS", "ID", "EA", "OA", "EAF", "BETA", "SE", "P", "N"]
-    
+
     for col in standard_cols:
         if col not in df_filt.columns:
             df_filt = df_filt.with_columns(pl.lit(None).alias(col))
-            
+
     final_df = df_filt.select(standard_cols)
-    
+
     gwas_out = os.path.join(args.outdir, "meta.tsv.gz")
     final_df.lazy().sink_csv(gwas_out, separator="\t", compression="gzip")
-
 
     metrics_path = os.path.join(args.outdir, "metrics.tsv")
     metrics_df = pl.DataFrame([{
         "study": args.study,
         "group": args.group,
-        "id": args.protein_id, 
-        "l_raw": l_raw, 
+        "id": args.protein_id,
+        "l_raw": l_raw,
         "l_filt": l_filt
     }])
     metrics_df.write_csv(metrics_path, separator="\t")

@@ -4,6 +4,8 @@ set -euo pipefail
 step1_bfile=""
 pheno_file=""
 cov_file=""
+master_file=""
+phenotype_id=""
 study=""
 group=""
 bsize=""
@@ -14,6 +16,8 @@ while [[ $# -gt 0 ]]; do
     --step1_bfile) step1_bfile="$2"; shift 2 ;;
     --pheno_file) pheno_file="$2"; shift 2 ;;
     --cov_file) cov_file="$2"; shift 2 ;;
+    --master_file) master_file="$2"; shift 2 ;;
+    --phenotype_id) phenotype_id="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
     --group) group="$2"; shift 2 ;;
     --bsize) bsize="$2"; shift 2 ;;
@@ -23,9 +27,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$outdir"
-mkdir -p "${outdir}/tmp"
 
 log_file="${outdir}/step1.log"
+threads="${NXF_TASK_CPUS:-${SLURM_CPUS_PER_TASK:-1}}"
+export OMP_NUM_THREADS="${threads}"
+export OPENBLAS_NUM_THREADS="${threads}"
+export MKL_NUM_THREADS="${threads}"
+export NUMEXPR_MAX_THREADS="${threads}"
 
 {
   echo "COVARIATE FILE PREVIEW (first 2 lines):"
@@ -33,18 +41,26 @@ log_file="${outdir}/step1.log"
   echo ""
 } > "$log_file"
 
-if ! regenie \
-  --step 1 \
-  --bed "${step1_bfile}" \
-  --phenoFile "${pheno_file}" \
-  --covarFile "${cov_file}" \
-  --bsize "${bsize}" \
-  --lowmem \
-  --lowmem-prefix "${outdir}/tmp/rg" \
-  --threads 8 \
-  --gz \
-  --force-step1 \
-  --out "${outdir}/step1" >> "$log_file" 2>&1; then
+cmd=(
+  regenie
+  --step 1
+  --bed "${step1_bfile}"
+  --phenoFile "${pheno_file}"
+  --covarFile "${cov_file}"
+  --bsize "${bsize}"
+  --threads "${threads}"
+  --gz
+  --force-step1
+  --run-l1 "${master_file}"
+  --l1-phenoList "${phenotype_id}"
+  --keep-l0
+  --out "${outdir}/step1"
+)
+
+printf 'Running: %q ' "${cmd[@]}" >> "$log_file"
+printf '\n' >> "$log_file"
+
+if ! "${cmd[@]}" >> "$log_file" 2>&1; then
     echo "ERROR: REGENIE Step 1 failed. Log follows:"
     cat "$log_file"
     exit 1
@@ -60,9 +76,34 @@ for f in "${outdir}"/step1_*.loco.gz; do
   mv "$f" "${outdir}/loco_${base}"
 done
 
-# Update pred.list to match renamed LOCO files
+# Update pred.list to use the renamed LOCO files and keep paths relative so the
+# file stays valid when Nextflow stages it into downstream task directories.
 if [[ -f "${outdir}/pred.list" ]]; then
-  sed -i 's/step1_/loco_/g' "${outdir}/pred.list"
+  python3 - "${outdir}/pred.list" <<'PY'
+import os
+import re
+import sys
+
+pred_path = sys.argv[1]
+tmp_path = pred_path + ".tmp"
+
+pattern = re.compile(r'\S+\.loco\.gz')
+
+def rewrite_token(match: re.Match[str]) -> str:
+    token = match.group(0)
+    base = os.path.basename(token)
+    if base.startswith("step1_") and base.endswith(".loco.gz"):
+        base = "loco_" + base[len("step1_"):]
+    if base.startswith("loco_") and base.endswith(".loco.gz"):
+        return f"./{base}"
+    return token
+
+with open(pred_path, "r", encoding="utf-8") as src, open(tmp_path, "w", encoding="utf-8") as dst:
+    for raw_line in src:
+        dst.write(pattern.sub(rewrite_token, raw_line))
+
+os.replace(tmp_path, pred_path)
+PY
 fi
 
-echo "REGENIE Step 1 for $study ($group) complete."
+echo "REGENIE Step 1 for $study ($group) phenotype $phenotype_id complete."

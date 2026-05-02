@@ -1,22 +1,25 @@
 process REGENIE_STEP1 {
   label        'regenie_step1'
   conda        "${projectDir}/envs/regenie.yml"
-  publishDir   { "${params.outdir}/${study_id}/_shared/${group}/007_regenie-step1" }, mode: 'copy'
+  publishDir   { "${params.outdir}/${study_id}/${protein_id}/${group}/007_regenie-step1" }, mode: 'copy'
 
   input:
-  tuple val(study_id), val(group), path(step1_bed), path(step1_bim), path(step1_fam), path(pheno_full), path(cov_file), val(bsize)
+  tuple val(study_id), val(group), val(protein_id), path(step1_bed), path(step1_bim), path(step1_fam), path(pheno_file), path(cov_file), val(master_file), val(bsize)
 
   output:
-  tuple val(study_id), val(group), path("pred.list"), path("loco_*.loco.gz")
+  tuple val(study_id), val(group), val(protein_id), path("pred.list"), path("loco_*.loco.gz")
 
   script:
   // Step 1 expects the bfile prefix
   def bfile_prefix = step1_bed.baseName
   """
+  # Refresh task hash after pred.list localization fix so -resume reruns Step 1.
   bash ${projectDir}/bin/run_regenie_step1.sh \\
     --step1_bfile ${bfile_prefix} \\
-    --pheno_file ${pheno_full} \\
+    --pheno_file ${pheno_file} \\
     --cov_file ${cov_file} \\
+    --master_file "${master_file}" \\
+    --phenotype_id "${protein_id}" \\
     --study ${study_id} \\
     --group ${group} \\
     --bsize ${bsize} \\
