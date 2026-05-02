@@ -1,6 +1,6 @@
 process ADD_PCS {
   label        'low'
-  conda        "${projectDir}/envs/r_gwas.yml"
+  conda        "${projectDir}/envs/py_validate.yml"
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/003_prepare-covariates" }, mode: 'copy'
 
   input:
@@ -8,11 +8,10 @@ process ADD_PCS {
 
   output:
   tuple val(study_id), val(group), path("covariates.cov")
-  path "scree_plot.png"
 
   script:
   """
-  Rscript ${projectDir}/bin/merge_pcs.R \\
+  python ${projectDir}/bin/merge_pcs.py \\
     --cov_file ${cov_file} \\
     --pcs_file ${pcs_file} \\
     --eval_file ${eval_file} \\

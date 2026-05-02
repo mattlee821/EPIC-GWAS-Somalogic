@@ -1,197 +1,382 @@
 # EPIC Somalogic GWAS Pipeline
 
-**Version:** March 2026  
+**Version:** May 2026
 
-This pipeline runs protein GWAS across multiple case‑control studies, stratified by analysis group (combined, cases, controls). It performs QC, GWAS, post‑GWAS QC/plots, and optional meta‑analysis (within‑study cases+controls and cross‑study meta).
+This repository contains a Nextflow DSL2 pipeline for protein GWAS across EPIC
+studies. The current pipeline runs study/group-specific sample and variant QC,
+phenotype/covariate preparation, PCA, REGENIE Step 0/1/2, post-GWAS QC, optional
+within-study and across-study METAL meta-analysis, and a final cohort metrics
+summary.
 
----
+The finalized workflow lives in `pipeline/`. The helper scripts used to prepare
+local inputs and submit the pipeline live in `src/`.
 
 ## Quick Start
 
-```bash
-# Example with comma-separated list
-bash src/004_run.sh \
-  --profile slurm \
-  --out "$ANALYSIS_OUT" \
-  --studies "Neuro_01,Brea_01_Erneg" \
-  --proteins "10620-21,18878-15,4721-54,8323-163" \
-  --pheno "data/phenotype/phenofile-test.txt" \
-  --covariates "Sex,Age_Recr" \
-  --meta-group true \
-  --meta-study "cases,controls,combined,meta"
+Set up Nextflow and the bundled METAL binary:
 
-# Example with file-based list (one per line)
-bash src/004_run.sh \
-  --proteins "data/phenotype/features.txt" \
-  # ... other args
+```bash
+bash src/001_source.sh
 ```
 
----
+Create or update the project inputs:
 
-## Key Inputs
+```bash
+bash src/002_data-genetics.sh
+Rscript src/003_data-phenotype.R
+Rscript src/004_samplesheet.R
+```
+
+Run a small test through the SLURM wrapper:
+
+```bash
+sbatch src/005_run.sh \
+  --profile slurm \
+  --out analysis/test-1000 \
+  --studies "Neuro_01,Brea_01_Erneg" \
+  --proteins "data/phenotype/traits-1000.txt" \
+  --pheno "data/phenotype/phenofile.txt" \
+  --covariates "Sex,Age_Recr" \
+  --meta-group true \
+  --meta-study "meta"
+```
+
+Run all numeric protein traits by passing an empty protein selector:
+
+```bash
+sbatch src/005_run.sh \
+  --out analysis/full \
+  --studies "Neuro_01,Brea_01_Erneg" \
+  --proteins "" \
+  --pheno "data/phenotype/phenofile.txt" \
+  --covariates "Sex,Age_Recr" \
+  --meta-group true \
+  --meta-study "meta"
+```
+
+`src/005_run.sh` always runs Nextflow with `-resume`. Edit the `#SBATCH` header
+at the top of that file to change the submit job name, logs, walltime, memory,
+CPUs, or partition.
+
+## Inputs
 
 ### `pipeline/samplesheet.csv`
+
 Required columns:
+
 - `study_id`
-- `plink_bfile` (prefix to .bed/.bim/.fam or .pgen/.pvar/.psam)
-- `bgen_dir` (directory with BGENs, if used)
-- `sample_file` (sample sheet: `.psam`, `.fam`, or `.sam`)
-- `group_column` (e.g. `PHENO` in the sample file)
-- `cases_value` (e.g. `2` for case‑control coding)
+- `plink_bfile`: prefix to a PLINK dataset. The pipeline accepts either
+  `<prefix>.pgen/.pvar/.psam` or `<prefix>.bed/.bim/.fam`.
+- `bgen_dir`: optional directory containing `chr<chromosome>.bgen` files. If a
+  matching BGEN exists, REGENIE Step 2 uses it; otherwise the PLINK prefix is
+  used.
+- `sample_file`: sample sheet for the study, usually `.psam`, `.fam`, or `.sam`.
+- `group_column`: sample or covariate column used for split analyses.
+- `cases_value`: value in `group_column` interpreted as cases.
 
-The pipeline uses `group_column` to split **cases**, **controls**, and **combined** groups.
-For the **combined** analysis, the `group_column` (e.g., `PHENO`) is also added as a covariate in the model.
+Example `samplesheet.csv` contents:
 
-### Global files
-Set in `pipeline/params.yaml`, or override at runtime:
+| study_id | plink_bfile | bgen_dir | sample_file | group_column | cases_value |
+|---|---|---|---|---|---|
+| `Study_01` | `../my/file/path/genetics/Study_01/study_01_genotypes` | `../my/file/path/genetics/Study_01/bgen` | `../my/file/path/genetics/Study_01/study_01_genotypes.psam` | `PHENO` | `2` |
+| `Study_02` | `../my/file/path/genetics/Study_02/study_02_genotypes` | `../my/file/path/genetics/Study_02/bgen` | `../my/file/path/genetics/Study_02/study_02_genotypes.fam` | `PHENO` | `2` |
+
+The default analysis groups are defined in `pipeline/params.yaml`:
+
+```yaml
+analysis_groups: ["cases", "controls"]
+```
+
+The code also supports a `combined` group if it is added to `analysis_groups`.
+For `combined`, the group column is retained as a covariate when available.
+
+### Phenotype and Covariate Files
+
+Set these in `pipeline/params.yaml` or override them at runtime:
+
 - `phenotype_file`
 - `covariate_file`
 
----
+If the configured covariate file does not exist, the pipeline falls back to the
+phenotype file for covariate staging. Both phenotype and covariate inputs must
+contain `IID`. `FID` is added as `0` during preparation if needed.
 
-## Running the Pipeline (`src/004_run.sh`)
+### Protein and Study Selection
 
-Arguments supported by `src/004_run.sh`:
+Runtime selectors:
 
-- `--profile`: Nextflow profile (default: `slurm`)
-- `--out`, `-o`, `--outdir`: output directory
-- `--studies`: comma‑separated study IDs (subset)
-- `--proteins`: subset of traits. Supports:
-    - Comma-separated list (e.g. `prot1,prot2`)
-    - **Path to a file** (e.g. `protein_list.txt`) with one ID per line
-    - **Omit entirely** to run ALL numeric traits in the phenotype file
-- `--pheno`: phenotype file path
-- `--covar`: covariate file path
-- `--covariates`: comma‑separated covariate names (e.g. `Sex,Age_Recr`)
-- `--meta-group`: `true|false`, run within‑study meta of cases+controls
-- `--meta-study`: comma‑separated list for study‑level meta (any combo of `cases,controls,combined,meta`). Default: `false`
+- `--include_studies`: comma-separated study IDs, or empty for all studies in
+  the samplesheet.
+- `--include_proteins`: comma-separated protein IDs, a path to a one-ID-per-line
+  file, or empty for all numeric phenotype columns.
+- `--covariates`: comma-separated covariate names. If empty, numeric covariates
+  are selected automatically after excluding IDs, metadata, and requested protein
+  columns.
 
-The script always runs Nextflow with `-resume`.
+The SLURM wrapper defaults to a small test list:
 
----
+```bash
+INCLUDE_PROTEINS="data/phenotype/traits-10.txt"
+```
+
+Pass `--proteins ""` to the wrapper when you want all numeric traits.
+
+## Running the Pipeline
+
+The recommended entry point is:
+
+```bash
+sbatch src/005_run.sh [options]
+```
+
+Supported wrapper options:
+
+- `--profile`: Nextflow profile. Default: `slurm`.
+- `--out`, `-o`, `--outdir`: output directory. Default: `<project>/analysis`.
+- `--studies`: comma-separated study IDs.
+- `--proteins`: comma-separated protein IDs, a list file, or `""` for all
+  numeric traits.
+- `--pheno`: phenotype file path.
+- `--covar`: covariate file path.
+- `--covariates`: comma-separated covariate names.
+- `--meta-group`: `true` or `false`. Runs within-study cases+controls
+  meta-analysis when enabled.
+- `--meta-study`: `false`, `true`, or a comma-separated set of analysis groups
+  to meta-analyze across studies. `true` maps to `meta`, meaning the
+  within-study meta outputs are meta-analyzed across studies. Explicit values can
+  include `cases`, `controls`, `combined`, and `meta` if those outputs exist.
+
+The wrapper sources `.env`, sets `GWAS_PROJECT_ROOT`, activates the `nf_master`
+conda environment, and runs:
+
+```bash
+cd pipeline
+nextflow run main.nf -profile <profile> -resume -params-file params.yaml ...
+```
 
 ## Workflow in `src/`
 
-Primary helper scripts (in order of typical use):
+Primary helper scripts:
 
-- `000_env.sh`: environment setup (shell helpers)
-- `000_tools.sh`: download and install the METAL binary into `tools/`
-- `001_data-genetics.sh`: ingest/prepare genotype data paths
-- `002_data-phenotype.R`: ingest/prepare phenotype data
-- `003_samplesheet.R`: build `pipeline/samplesheet.csv` from metadata
-- `004_run.sh`: main pipeline launcher (Nextflow wrapper)
-- `005_submit.sh`: SLURM submission wrapper for `004_run.sh`
-- `006_clear_meta_cache.sh`: remove Nextflow cache for specific processes (e.g., meta)
+- `src/001_source.sh`: create the `nf_master` environment and install the bundled
+  METAL binary into `pipeline/tools/metal/metal`.
+- `src/002_data-genetics.sh`: project-specific helper to copy documented genetic
+  inputs into the local data layout.
+- `src/003_data-phenotype.R`: build `data/phenotype/phenofile.txt` and trait list
+  files such as `traits-10.txt`, `traits-100.txt`, and `traits-1000.txt`.
+- `src/004_samplesheet.R`: generate `pipeline/samplesheet.csv` from the phenotype
+  file and genetics directory.
+- `src/005_run.sh`: SLURM submission wrapper for the Nextflow pipeline.
 
-Additional:
-- `src/test/`: ad‑hoc testing utilities (e.g., meta‑analysis testing)
-- `src/archive/`: archived components kept for reference
+## Pipeline Parameters
 
----
+Important defaults in `pipeline/params.yaml`:
 
-## Pipeline Steps and Filters
+| Parameter | Default | Meaning |
+|---|---:|---|
+| `analysis_groups` | `["cases", "controls"]` | Study groups to run |
+| `gwas_qc_batch_size` | `10` | Proteins handled per `GWAS_QC` task within each study/group |
+| `maf` | `0.01` | Variant MAF threshold |
+| `hwe` | `1e-15` | Variant HWE threshold |
+| `geno` | `0.05` | Variant missingness threshold |
+| `mind` | `0.05` | Sample missingness threshold |
+| `info_score` | `0.3` | Minimum INFO score in GWAS QC |
+| `king_cutoff` | `0.0884` | KING relatedness cutoff |
+| `ld_window_kb` | `1000` | LD-pruning window |
+| `ld_step` | `1` | LD-pruning step |
+| `ld_r2` | `0.5` | LD-pruning r2 threshold |
+| `regenie_bsize_step1` | `1000` | REGENIE Step 0/1 block size |
+| `regenie_bsize_step2` | `400` | REGENIE Step 2 block size |
+| `chromosomes` | `1..22` | Chromosomes processed in Step 2 |
 
-Below are the major steps and **all filtering thresholds** used. Thresholds come from `pipeline/params.yaml`.
+## Pipeline Steps
 
-### 1. Sample QC (PLINK2)
-**Script:** `pipeline/bin/sample_qc.sh`  
-**Inputs:** genotype data + optional keep list  
-**Filters:**
-1. **Call rate filter:** `--mind 0.05`  
-2. **Heterozygosity outliers:** F‑coefficient within **mean ± 3 SD**  
-   - Computed on LD‑pruned markers  
-3. **Relatedness filter:** `--king-cutoff 0.0884` (≈ 2nd‑degree relatedness)  
+### 1. Input Validation
 
-**Output:** `qc_pass_samples.txt`
+**Module:** `pipeline/modules/validate_inputs.nf`  
+**Script:** `pipeline/bin/validate_inputs.py`
 
----
+Validates samplesheet files, phenotype/covariate files, requested studies,
+requested proteins, requested covariates, and group columns. Writes:
 
-### 2. Variant QC (PLINK2)
-**Script:** `pipeline/bin/variant_qc.sh`  
-**Filters:**
+```text
+<outdir>/_shared/001_validation/validation_report.txt
+```
+
+### 2. Phenotype and Covariate Preparation
+
+**Modules:** `prepare_phenotypes.nf`, `prepare_covariates.nf`  
+**Scripts:** `prepare_phenotypes.py`, `prepare_covariates.py`
+
+For each selected study and analysis group, the pipeline:
+
+- intersects phenotype/covariate samples with the study sample file;
+- filters cases or controls using `group_column` and `cases_value`;
+- selects requested proteins, or all numeric non-covariate traits;
+- writes one `feature_*.pheno` file per protein plus `full.pheno`;
+- writes `features.manifest`, `protein_summary.tsv`, and `keep_samples.txt`;
+- prepares a REGENIE covariate file;
+- later merges 10 PCs into `covariates.cov`.
+
+### 3. Sample QC
+
+**Module:** `sample_qc.nf`  
+**Script:** `sample_qc.sh`
+
+PLINK2 sample filters:
+
+- `--mind 0.05`
+- heterozygosity outliers using F coefficient mean +/- 3 SD, computed after
+  temporary LD pruning with `--indep-pairwise 200 50 0.25`
+- `--king-cutoff 0.0884`
+
+Output staged per group:
+
+```text
+<outdir>/<study>/_shared/<group>/004_sample-qc/qc_pass_samples.txt
+```
+
+### 4. Variant QC
+
+**Module:** `variant_qc.nf`  
+**Script:** `variant_qc.sh`
+
+PLINK2 variant filters:
+
 - `--maf 0.01`
 - `--hwe 1e-15`
 - `--geno 0.05`
 
-**Output:** `variant_qc_pass.snplist`
+Output staged per group:
 
----
+```text
+<outdir>/<study>/_shared/<group>/005_variant-qc/variant_qc_pass.snplist
+```
 
-### 3. LD Pruning
-**Script:** `pipeline/bin/ld_pruning.sh`  
-**Parameters:**
-- `--indep-pairwise 1000kb 1 0.5`  
+### 5. LD Pruning and PCA
 
-This creates LD‑pruned variants for REGENIE Step 1 and outputs a pruned PLINK dataset (`step1_input.*`).
+**Modules:** `ld_pruning.nf`, `pca.nf`, `add_pcs.nf`  
+**Scripts:** `ld_pruning.sh`, `compute_pcs.sh`, `merge_pcs.py`
 
----
+LD pruning uses:
 
-### 4. PCA (PLINK2)
-**Script:** `pipeline/bin/compute_pcs.sh`  
-**Settings:** `--pca 10`  
+```text
+--indep-pairwise 1000kb 1 0.5
+```
 
-PCs are computed on the **same LD‑pruned data** used for REGENIE Step 1.  
-They are merged into the covariate file and used in **both Step 1 and Step 2**.
+The resulting `step1_input.*` PLINK bed set is used for REGENIE Step 0/1 and for
+PCA. PCA uses `plink2 --pca 10`; the PCs are merged into the group covariate
+file.
 
----
+### 6. REGENIE Step 0
 
-### 5. REGENIE Step 1
-**Script:** `pipeline/bin/run_regenie_step1.sh`  
-**Key settings:**
+**Module:** `regenie_step0.nf`  
+**Script:** `run_regenie_step0.sh`
+
+Step 0 is shared per study and group. It runs REGENIE Step 1 split-level-0 work
+with:
+
 - `--step 1`
-- `--bsize 1000`
-- `--lowmem`
-- LOCO predictors generated (`loco_*.loco.gz`)
+- `--bsize <regenie_bsize_step1>`
+- `--split-l0`
+- `--run-l0`
+- `--gz`
+- `--force-step1`
 
-REGENIE Step 1 expects strictly numeric data. The pipeline automatically:
-1. Filters for numeric columns in the phenotype file.
-2. **Excludes** columns identified as covariates (`--covariates`).
-3. **Excludes** common metadata columns (`STUDY`, `PlateId`, `FID`, `IID`).
+Published files include the level-0 master file and logs under:
 
-**Inputs:** LD‑pruned genotype, covariates, cleaned phenotypes  
+```text
+<outdir>/<study>/_shared/<group>/006b_regenie-step0/
+```
 
----
+### 7. REGENIE Step 1
 
-### 6. REGENIE Step 2
-**Script:** `pipeline/bin/run_regenie_step2.sh`  
-**Key settings:**
+**Module:** `regenie_step1.nf`  
+**Script:** `run_regenie_step1.sh`
+
+Step 1 runs one task per study, group, and protein using the Step 0 master file:
+
+- `--step 1`
+- `--run-l1 <master>`
+- `--l1-phenoList <protein_id>`
+- `--keep-l0`
+- `--bsize <regenie_bsize_step1>`
+- `--gz`
+- `--force-step1`
+
+Outputs:
+
+```text
+<outdir>/<study>/<protein>/<group>/007_regenie-step1/pred.list
+<outdir>/<study>/<protein>/<group>/007_regenie-step1/loco_*.loco.gz
+```
+
+### 8. REGENIE Step 2
+
+**Module:** `regenie_step2.nf`  
+**Script:** `run_regenie_step2.sh`
+
+Step 2 runs one task per study, group, and protein, then loops over the configured
+chromosome list inside that task.
+
+Key settings:
+
 - `--step 2`
-- `--bsize 400`
 - `--qt`
 - `--gz`
-- Per‑chromosome and per‑chunk association testing
+- `--bsize <regenie_bsize_step2>`
+- `--chr <chromosome>`
 
-**Outputs:** raw REGENIE `.regenie.gz` summary stats (per chunk per chromosome)
+If `bgen_dir/chrN.bgen` exists, Step 2 uses that BGEN plus `sample_file`.
+Otherwise it uses the PLINK prefix from `plink_bfile`.
 
----
+Outputs:
 
-### 7. Post‑GWAS QC + Plots (Python)
-**Script:** `pipeline/bin/finalise.py`  
-**Functions:**
-1. Concatenates all REGENIE outputs for a protein and group
-2. Computes **P = 10^(-LOG10P)**
-3. Keeps key columns
-4. Generates **pre‑QC Manhattan + QQ plots**
-5. Filters (QC):
-   - INFO score must be at least 0.3.
-   - Variants must have sample size at least half of the maximum sample size observed in that group; this removes variants with unusually small effective N.
-   - Effect sizes with absolute value greater than 10 are removed to exclude extreme, likely unstable estimates.
-   - Standard errors must be positive and not excessively large (kept only if at most 10), which removes invalid or highly unstable regression results.
-6. Writes final `gwas.tsv.gz`
-7. Generates **post‑QC Manhattan + QQ plots**
-8. Writes `metrics.tsv`
+```text
+<outdir>/<study>/<protein>/<group>/008_regenie-step2/chr<chromosome>.regenie.gz
+```
 
-**Final GWAS columns (order):**  
-`CHR, POS, ID, EA, OA, EAF, BETA, SE, P, N, CHISQ`
+### 9. Post-GWAS QC
 
----
+**Module:** `gwas_qc.nf`  
+**Script:** `gwas_qc.py`
 
-### 8. Meta‑Analysis (METAL)
-**Script:** `pipeline/bin/run_metal.sh`  
-**Settings:**
+`GWAS_QC` batches proteins by `gwas_qc_batch_size` within each study/group. For
+each protein it:
+
+- concatenates REGENIE chromosome outputs;
+- computes `P = 10^(-LOG10P)`;
+- renames REGENIE columns to the standard output names;
+- filters to `INFO >= info_score`;
+- filters to `N >= 0.5 * max(N)` for that protein/study/group;
+- computes genomic inflation metrics before and after filtering.
+
+GWAS output columns:
+
+```text
+CHR, POS, ID, EA, OA, EAF, BETA, SE, P, N, INFO
+```
+
+Outputs:
+
+```text
+<outdir>/<study>/<protein>/<group>/009_QC/gwas.tsv.gz
+<outdir>/<study>/<protein>/<group>/009_QC/metrics.tsv
+```
+
+### 10. Meta-Analysis
+
+**Modules:** `meta_group.nf`, `meta_study.nf`  
+**Scripts:** `run_metal.sh`, `metal_qc.py`
+
+METAL settings:
+
+- `TRACKPOSITIONS ON`
 - `SCHEME STDERR`
 - `AVERAGEFREQ ON`
 - `MINMAXFREQ ON`
+- `CUSTOMVARIABLE TotalSampleSize`
+- `LABEL TotalSampleSize as N`
 - `MARKER ID`
 - `ALLELE EA OA`
 - `EFFECT BETA`
@@ -199,63 +384,132 @@ REGENIE Step 1 expects strictly numeric data. The pipeline automatically:
 - `PVALUE P`
 - `WEIGHT N`
 - `FREQ EAF`
-- **Custom variable to track total N across studies:**
-  - `CUSTOMVARIABLE TotalSampleSize`
-  - `LABEL TotalSampleSize as N`
+- `CHROMOSOMELABEL CHR`
+- `POSITIONLABEL POS`
 
-**Two meta modes:**
-1. **Within‑study meta (`--meta-group true`)**  
-   Cases + Controls → `meta/METAL` under each study/protein
+Within-study meta-analysis is enabled with `--meta-group true`. It combines
+cases and controls within each study/protein and writes:
 
-2. **Study‑level meta (`--meta-study`)**  
-   Any combination of `cases,controls,combined,meta`  
-   Output path: `meta/<protein>/<analysis_type>/METAL`
-
-**Meta QC (post‑METAL):**
-- `finalise.py` is run on all METAL outputs to generate:
-  - `gwas.tsv.gz`
-  - `metrics.tsv`
-  - `figure.png`
-- These are written to a **QC** subdirectory alongside METAL output:
-  - Within‑study meta: `<study>/<protein>/meta/QC`
-  - Study‑level meta: `meta/<protein>/<analysis_type>/QC`
-
-**Outputs (kept):**
-`meta.tbl.gz`, `meta.tbl.info`, `meta.log` (raw METAL)  
-`gwas.tsv.gz`, `metrics.tsv`, `figure.png` (QC output)
-
----
-
-## Output Structure (Summary)
-
-Top‑level:
+```text
+<outdir>/<study>/<protein>/meta/010_METAL/meta.log
+<outdir>/<study>/<protein>/meta/010_METAL/meta.tbl.info
+<outdir>/<study>/<protein>/meta/011_QC/meta.tsv.gz
+<outdir>/<study>/<protein>/meta/011_QC/metrics.tsv
 ```
+
+Across-study meta-analysis is enabled with `--meta-study`. `--meta-study true`
+means `meta`, which meta-analyzes the within-study meta outputs across studies.
+Explicit values such as `cases,controls,meta` can be used when those group
+outputs exist.
+
+Across-study outputs:
+
+```text
+<outdir>/meta/<protein>/<group>/012_METAL/meta.log
+<outdir>/meta/<protein>/<group>/012_METAL/meta.tbl.info
+<outdir>/meta/<protein>/<group>/013_QC/meta.tsv.gz
+<outdir>/meta/<protein>/<group>/013_QC/metrics.tsv
+```
+
+Meta QC keeps the standard columns:
+
+```text
+CHR, POS, ID, EA, OA, EAF, BETA, SE, P, N
+```
+
+It filters to `N >= 0.5 * max(N)` and writes lambda metrics.
+
+### 11. Cohort Summary
+
+**Module:** `cohort_summary.nf`  
+**Script:** `generate_cohort_summary.py`
+
+Collects all `metrics.tsv` files from GWAS QC and enabled meta-analysis stages,
+drops internal flag columns if present, and writes:
+
+```text
+<outdir>/all_metrics.tsv
+```
+
+## Output Structure
+
+Representative output layout:
+
+```text
 <outdir>/
-├── _shared/001_validation
-├── <study_id>/
-│   ├── _shared/<group>/...            # Steps 2–7 shared outputs
-│   └── <protein>/<group>/
-│       ├── 008_regenie-step2
-│       └── 009_QC
-└── meta/
-    └── <protein>/<analysis_type>/
-        ├── METAL
-        └── QC
++-- _shared/
+|   +-- 001_validation/
++-- <study>/
+|   +-- _shared/
+|   |   +-- <group>/
+|   |       +-- 002_prepare-phenotypes/
+|   |       +-- 003_prepare-covariates/
+|   |       +-- 004_sample-qc/
+|   |       +-- 005_variant-qc/
+|   |       +-- 006_ld-pruning/
+|   |       +-- 006b_regenie-step0/
+|   +-- <protein>/
+|       +-- <group>/
+|       |   +-- 007_regenie-step1/
+|       |   +-- 008_regenie-step2/
+|       |   +-- 009_QC/
+|       +-- meta/
+|           +-- 010_METAL/
+|           +-- 011_QC/
++-- meta/
+|   +-- <protein>/
+|       +-- <group>/
+|           +-- 012_METAL/
+|           +-- 013_QC/
++-- all_metrics.tsv
++-- pipeline_info/
+    +-- execution_report.html
+    +-- execution_timeline.html
+    +-- execution_trace.txt
 ```
 
----
+## Runtime and Retry Settings
 
-## Notes
-- `--meta-study` defaults to `false`.  
-  You must explicitly set it to run study‑level meta.
-- `--meta-group` defaults to `false`.  
-  Enable it to create within‑study cases+controls meta.
+The SLURM profile in `pipeline/nextflow.config` uses a queue size of `1000` and
+retries transient signal-like exits (`130`, `137`, `139`, `140`, `143`) up to two
+times for most tasks. `REGENIE_STEP0` and `REGENIE_STEP1` terminate immediately
+on failure.
 
----
+Important process time limits:
 
-## Scaling to Thousands of Proteins
+- `REGENIE_STEP2`: `2.h`
+- `GWAS_QC`: `2.h`
+- `META_GROUP`: `2.h`
+- `META_STUDY`: `2.h`
 
-To run a large-scale analysis:
-1. **Provide a list file**: Use `--proteins "/path/to/list.txt"` (one ID per line).
-2. **Run All**: Omit `--proteins` entirely. The pipeline will automatically identify and run all 3,000+ numeric traits while ignoring metadata.
-3. **Chunking**: By default, Step 2 is chunked (`chunk_size: 100` in `params.yaml`). This splits 3,000 proteins into 30 parallel Slurm jobs for maximum efficiency.
+The explicit `2.h` limits for `GWAS_QC`, `META_GROUP`, and `META_STUDY` should be
+kept; they avoid the one-hour timeout failures observed in earlier validation
+runs.
+
+## Troubleshooting
+
+### Requested proteins or covariates are missing
+
+Check:
+
+```text
+<outdir>/_shared/001_validation/validation_report.txt
+```
+
+For protein lists, `--proteins` must be either a comma-separated list of column
+names or a file containing one phenotype column name per line.
+
+### Run all proteins with the wrapper
+
+The wrapper default is a 10-protein test list. Use an explicit empty value:
+
+```bash
+sbatch src/005_run.sh --proteins ""
+```
+
+### Downstream tasks hit time limits
+
+Keep or increase the `time` values for `GWAS_QC`, `META_GROUP`, and `META_STUDY`
+in both the base `process` block and `profiles.slurm.process` overrides in
+`pipeline/nextflow.config`, then resubmit with `sbatch src/005_run.sh`. The
+wrapper uses `-resume`.

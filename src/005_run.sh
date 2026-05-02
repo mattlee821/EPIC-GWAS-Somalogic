@@ -1,0 +1,226 @@
+#!/bin/bash
+#SBATCH --job-name=test-10
+#SBATCH --output=src/logs/test-10.log
+#SBATCH --error=src/logs/test-10.err
+#SBATCH --time=10-00:00:00
+#SBATCH --mem=32G
+#SBATCH --cpus-per-task=2
+#SBATCH --partition=high_p
+#SBATCH --open-mode=truncate
+
+# Script: src/005_run.sh
+# Purpose: Standalone SLURM submission script for the Nextflow GWAS pipeline.
+# Edit the SBATCH header above to change job name, logs, or cluster resources.
+
+set -euo pipefail
+
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  DEFAULT_PROJ_ROOT="${SLURM_SUBMIT_DIR}"
+else
+  DEFAULT_PROJ_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+
+source_env_file() {
+  local env_file="$1"
+  if [[ -f "$env_file" ]]; then
+    set -a
+    source "$env_file"
+    set +a
+  fi
+}
+
+resolve_path() {
+  local path="$1"
+  case "$path" in
+    /*) printf '%s\n' "$path" ;;
+    *) printf '%s\n' "${PROJ_ROOT%/}/$path" ;;
+  esac
+}
+
+source_env_file "${DEFAULT_PROJ_ROOT}/.env"
+PROJ_ROOT="${GWAS_PROJECT_ROOT:-$DEFAULT_PROJ_ROOT}"
+PIPELINE_DIR="${PROJ_ROOT}/pipeline"
+PARAMS_FILE="${PIPELINE_DIR}/params.yaml"
+
+PROFILE="slurm"
+RESULT_DIR="${PROJ_ROOT}/analysis"
+INCLUDE_STUDIES="Neuro_01,Brea_01_Erneg"
+INCLUDE_PROTEINS="data/phenotype/traits-10.txt"
+PHENO_FILE="${GWAS_PHENO_FILE:-data/phenotype/phenofile.txt}"
+COVAR_FILE=""
+COVARIATES="Sex,Age_Recr"
+META_GROUP="true"
+META_STUDY="true"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)
+      PROFILE="$2"
+      shift 2
+      ;;
+    --out|-o|--outdir)
+      RESULT_DIR="$2"
+      shift 2
+      ;;
+    --studies)
+      INCLUDE_STUDIES="$2"
+      shift 2
+      ;;
+    --proteins)
+      INCLUDE_PROTEINS="$2"
+      shift 2
+      ;;
+    --pheno)
+      PHENO_FILE="$2"
+      shift 2
+      ;;
+    --covar)
+      COVAR_FILE="$2"
+      shift 2
+      ;;
+    --covariates)
+      COVARIATES="$2"
+      shift 2
+      ;;
+    --meta-group)
+      META_GROUP="$2"
+      shift 2
+      ;;
+    --meta-study)
+      META_STUDY="$2"
+      shift 2
+      ;;
+    -h|--help)
+      cat <<'EOF'
+Usage:
+  sbatch src/005_run.sh [options]
+
+Options:
+  --profile     Nextflow profile (default: slurm)
+  --out, -o     Output directory for results (default: <project>/analysis)
+  --studies     Comma-separated list of studies (default: Neuro_01,Brea_01_Erneg)
+  --proteins    Comma-separated list of proteins or a file path (default: data/phenotype/traits-10.txt)
+  --pheno       Path to phenotype file (default: data/phenotype/phenofile.txt)
+  --covar       Path to covariate file
+  --covariates  Comma-separated covariate names (default: Sex,Age_Recr)
+  --meta-group  true/false for within-study meta (default: true)
+  --meta-study  Study-level meta analyses (default: true)
+
+SLURM settings such as job name, logs, time, memory, CPUs, and partition are
+defined in the #SBATCH header at the top of src/005_run.sh.
+EOF
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! -d "$PIPELINE_DIR" ]]; then
+  echo "ERROR: Pipeline directory not found: $PIPELINE_DIR" >&2
+  exit 1
+fi
+
+ABS_RESULT_DIR="$(resolve_path "$RESULT_DIR")"
+mkdir -p "$ABS_RESULT_DIR"
+mkdir -p "${PROJ_ROOT}/src/logs"
+
+if [[ -n "$PHENO_FILE" ]]; then
+  ABS_PHENO="$(resolve_path "$PHENO_FILE")"
+  if [[ ! -f "$ABS_PHENO" ]]; then
+    echo "ERROR: Phenotype file not found: $ABS_PHENO" >&2
+    exit 1
+  fi
+else
+  ABS_PHENO=""
+fi
+
+if [[ -n "$COVAR_FILE" ]]; then
+  ABS_COVAR="$(resolve_path "$COVAR_FILE")"
+  if [[ ! -f "$ABS_COVAR" ]]; then
+    echo "ERROR: Covariate file not found: $ABS_COVAR" >&2
+    exit 1
+  fi
+else
+  ABS_COVAR=""
+fi
+
+ABS_PROTS=""
+if [[ -n "$INCLUDE_PROTEINS" ]]; then
+  PROTEIN_PATH_CANDIDATE="$(resolve_path "$INCLUDE_PROTEINS")"
+  if [[ -f "$PROTEIN_PATH_CANDIDATE" ]]; then
+    ABS_PROTS="$PROTEIN_PATH_CANDIDATE"
+  fi
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
+  echo "ERROR: conda is required to launch the GWAS pipeline." >&2
+  exit 1
+fi
+
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate nf_master
+unset R_HOME
+
+export GWAS_PROJECT_ROOT="$PROJ_ROOT"
+export NXF_OPTS="${NXF_OPTS:- -Xms4g -Xmx24g}"
+
+echo "=========================================="
+echo " Launching Nextflow GWAS Pipeline"
+echo "=========================================="
+echo "Pipeline: $PIPELINE_DIR"
+echo "Profile:  $PROFILE"
+echo "Studies:  ${INCLUDE_STUDIES:-ALL}"
+echo "Proteins: ${INCLUDE_PROTEINS:-ALL}"
+echo "Output:   $ABS_RESULT_DIR"
+echo "Meta-group: ${META_GROUP:-false}"
+echo "Meta-study: ${META_STUDY:-false}"
+echo "=========================================="
+
+NF_CMD=(
+  nextflow run main.nf
+  -profile "$PROFILE"
+  -resume
+  -params-file "$PARAMS_FILE"
+  --outdir "$ABS_RESULT_DIR"
+)
+
+if [[ -n "$INCLUDE_STUDIES" ]]; then
+  NF_CMD+=(--include_studies "$INCLUDE_STUDIES")
+fi
+
+if [[ -n "$INCLUDE_PROTEINS" ]]; then
+  NF_CMD+=(--include_proteins "${ABS_PROTS:-$INCLUDE_PROTEINS}")
+fi
+
+if [[ -n "$ABS_PHENO" ]]; then
+  NF_CMD+=(--phenotype_file "$ABS_PHENO")
+fi
+
+if [[ -n "$ABS_COVAR" ]]; then
+  NF_CMD+=(--covariate_file "$ABS_COVAR")
+fi
+
+if [[ -n "$COVARIATES" ]]; then
+  NF_CMD+=(--covariates "$COVARIATES")
+fi
+
+if [[ -n "$META_GROUP" ]]; then
+  NF_CMD+=(--meta_group "$META_GROUP")
+fi
+
+if [[ -n "$META_STUDY" ]]; then
+  NF_CMD+=(--meta_study "$META_STUDY")
+fi
+
+echo "Executing:"
+printf 'cd %q &&' "$PIPELINE_DIR"
+printf ' %q' "${NF_CMD[@]}"
+echo
+
+cd "$PIPELINE_DIR"
+"${NF_CMD[@]}"

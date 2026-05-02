@@ -1,6 +1,6 @@
 process META_QC {
   label        'medium'
-  conda        "${projectDir}/envs/py_gwas.yml"
+  conda        "${projectDir}/envs/py_qc.yml"
   publishDir   {
     def pid = (protein_ids instanceof java.util.Collection && protein_ids) ? protein_ids[0] : protein_ids
     if (study_id == "meta-study" || study_id == "meta_study") {
@@ -20,6 +20,12 @@ process META_QC {
 
   script:
   """
+  export POLARS_MAX_THREADS="${task.cpus}"
+  export RAYON_NUM_THREADS="${task.cpus}"
+  export OMP_NUM_THREADS="${task.cpus}"
+  export OPENBLAS_NUM_THREADS="${task.cpus}"
+  export MKL_NUM_THREADS="${task.cpus}"
+  export NUMEXPR_MAX_THREADS="${task.cpus}"
   echo -e "${mapping}" > mapping.txt
   while IFS=':' read -r prot file; do
     python ${projectDir}/bin/metal_qc.py \\

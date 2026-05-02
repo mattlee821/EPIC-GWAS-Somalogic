@@ -12,8 +12,9 @@ covariates:        ""          # comma-separated list of covariates (e.g. Age_Re
 # --- Analysis groups ---
 analysis_groups:   ["cases", "controls"]
 
-# --- Deprecated chunk settings (kept for CLI compatibility; ignored by pipeline_v2) ---
-chunk_size:        100
+# --- Chunking ---
+chunk_size:        100         # retained for backward compatibility; REGENIE now fans out one feature per job
+gwas_qc_batch_size: 10         # number of proteins handled per GWAS_QC task within each study-group
 
 # --- QC thresholds ---
 maf:               0.01
@@ -35,7 +36,7 @@ regenie_bsize_step1:  1000
 regenie_bsize_step2:  400
 
 # --- METAL ---
-metal_binary:      "../tools/metal/metal"
+metal_binary:      "tools/metal/metal"   # resolved relative to pipeline/ unless given as an absolute path
 
 # --- Chromosomes ---
 chromosomes:       [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]

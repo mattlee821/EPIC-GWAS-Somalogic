@@ -3,6 +3,8 @@ import argparse
 import sys
 import os
 
+from config import read_sample_file, resolve_column_name
+
 def check_file_exists(filepath, desc):
     if not os.path.exists(filepath):
         print(f"FAIL: {desc} '{filepath}' does not exist (Current Dir: {os.getcwd()})")
@@ -25,9 +27,13 @@ def main():
     
     error_found = False
     with open(report_path, "w") as f:
+        def report(message, *, is_error=False):
+            print(message, file=f)
+            print(message, file=sys.stderr if is_error else sys.stdout)
+
         # 1. Samplesheet
         if not check_file_exists(args.samplesheet, "Samplesheet"):
-            f.write(f"FAIL: Samplesheet missing\n")
+            report("FAIL: Samplesheet missing", is_error=True)
             sys.exit(1)
             
         studies = []
@@ -46,7 +52,7 @@ def main():
             if req_studies and sid not in req_studies:
                 continue
                 
-            f.write(f"Checking study {sid}...\n")
+            report(f"Checking study {sid}...")
             
             # Genetic data detection
             bfile_prefix = s['plink_bfile']
@@ -54,16 +60,16 @@ def main():
             is_bfile = os.path.exists(bfile_prefix + ".bed")
             
             if not (is_pfile or is_bfile):
-                f.write(f"FAIL: No genetic data found for {sid} with prefix {bfile_prefix}\n")
-                f.write(f"      (Looked for {bfile_prefix}.pgen or .bed)\n")
+                report(f"FAIL: No genetic data found for {sid} with prefix {bfile_prefix}", is_error=True)
+                report(f"      (Looked for {bfile_prefix}.pgen or .bed)", is_error=True)
                 error_found = True
             else:
                 fmt = "PLINK2 (pfile)" if is_pfile else "PLINK1.9 (bfile)"
-                f.write(f"Found {fmt} data for {sid}\n")
+                report(f"Found {fmt} data for {sid}")
 
         # 3. Phenotype Header
         if not check_file_exists(args.phenotype_file, "Phenotype file"):
-            f.write(f"FAIL: Missing phenotype file\n")
+            report("FAIL: Missing phenotype file", is_error=True)
             error_found = True
         else:
             with open(args.phenotype_file, "r") as pf:
@@ -83,7 +89,10 @@ def main():
                     if missing_proteins:
                         # Only report first 10 missing to avoid flooding
                         show_missing = missing_proteins[:10]
-                        f.write(f"FAIL: Missing requested proteins (showing {len(show_missing)}/{len(missing_proteins)}): {', '.join(show_missing)}\n")
+                        report(
+                            f"FAIL: Missing requested proteins (showing {len(show_missing)}/{len(missing_proteins)}): {', '.join(show_missing)}",
+                            is_error=True,
+                        )
                         error_found = True
 
         # 4. Covariate Header (Fallback to phenotype file if covariates.txt doesn't exist)
@@ -96,12 +105,12 @@ def main():
                 
                 if args.covariates:
                     req_covs = [x.strip() for x in args.covariates.split(",")]
-                    missing_covs = [c for c in req_covs if c not in cov_header]
+                    missing_covs = [c for c in req_covs if resolve_column_name(cov_header, c) is None]
                     if missing_covs:
-                        f.write(f"FAIL: Missing requested covariates: {', '.join(missing_covs)}\n")
+                        report(f"FAIL: Missing requested covariates: {', '.join(missing_covs)}", is_error=True)
                         error_found = True
         else:
-            f.write(f"FAIL: Covariate source '{cov_source}' not found.\n")
+            report(f"FAIL: Covariate source '{cov_source}' not found.", is_error=True)
             error_found = True
             cov_header = []
 
@@ -114,28 +123,30 @@ def main():
             if not gcol:
                 continue
 
-            in_cov = gcol in cov_header
+            in_cov = resolve_column_name(cov_header, gcol) is not None
             in_sample = False
             sample_file = s.get('sample_file', '')
             if sample_file and os.path.exists(sample_file):
-                if sample_file.endswith((".fam", ".sam")):
-                    sample_header = ["FID", "IID", "PID", "MID", "SEX", "PHENO"]
-                    if gcol in sample_header:
-                        in_sample = True
+                try:
+                    sample_df = read_sample_file(sample_file)
+                except Exception as exc:
+                    report(f"FAIL: Could not read sample file for {s['study_id']}: {exc}", is_error=True)
+                    error_found = True
                 else:
-                    with open(sample_file, "r") as sf:
-                        sample_header = sf.readline().strip().split()
-                        if gcol in sample_header:
-                            in_sample = True
+                    if resolve_column_name(sample_df.columns, gcol) is not None:
+                        in_sample = True
 
             if not in_cov and not in_sample:
-                f.write(f"FAIL: Group column '{gcol}' missing for {s['study_id']} (covariate/sample files)\n")
+                report(
+                    f"FAIL: Group column '{gcol}' missing for {s['study_id']} (covariate/sample files)",
+                    is_error=True,
+                )
                 error_found = True
         
         if error_found:
-            f.write("Validation finished with ERRORS.\n")
+            report("Validation finished with ERRORS.", is_error=True)
         else:
-            f.write("Validation PASS.\n")
+            report("Validation PASS.")
 
     if error_found:
         print("Validation finished with ERRORS. Check reports.")

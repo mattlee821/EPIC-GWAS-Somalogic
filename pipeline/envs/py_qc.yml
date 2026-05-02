@@ -1,8 +1,10 @@
-name: plink2
+name: py_qc
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
   - defaults
 dependencies:
-  - plink2
   - python=3.10
+  - numpy
+  - scipy
+  - polars
