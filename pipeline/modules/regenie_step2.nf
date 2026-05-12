@@ -8,7 +8,7 @@ process REGENIE_STEP2 {
   }
 
   input:
-  tuple val(study_id), val(group), val(protein_id), val(plink_bfile), val(bgen_dir), val(sample_file), val(chromosomes), path(pheno_file), path(cov_file), path(pred_list), path(loco_files), val(bsize)
+  tuple val(study_id), val(group), val(protein_id), val(pfile), val(sample_file), val(chromosomes), path(pheno_file), path(cov_file), path(pred_list), path(loco_files), val(bsize)
 
   output:
   tuple val(study_id), val(group), val(protein_id), path("*.regenie.gz")
@@ -16,8 +16,7 @@ process REGENIE_STEP2 {
   script:
   """
   bash ${projectDir}/bin/run_regenie_step2.sh \\
-    --pfile ${plink_bfile} \\
-    --bgen_dir ${bgen_dir} \\
+    --pfile ${pfile} \\
     --sample_file ${sample_file} \\
     --pheno_file ${pheno_file} \\
     --cov_file ${cov_file} \\

@@ -1,9 +1,9 @@
 process META_STUDY {
   label        'medium'
   conda        "${projectDir}/envs/py_qc.yml"
-  publishDir   params.outdir, mode: 'rellink', saveAs: { name ->
-    def metalDir = "meta/${protein_id}/${group}/012_METAL"
-    def qcDir = "meta/${protein_id}/${group}/013_QC"
+  publishDir   params.outdir, mode: 'copy', overwrite: true, saveAs: { name ->
+    def metalDir = "meta/${protein_id}/012_METAL"
+    def qcDir = "meta/${protein_id}/013_QC"
     if (name == 'meta.tsv.gz' || name == 'metrics.tsv') {
       return "${qcDir}/${name}"
     }

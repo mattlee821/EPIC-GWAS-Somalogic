@@ -13,13 +13,40 @@ local inputs and submit the pipeline live in `src/`.
 
 ## Quick Start
 
-Set up Nextflow and the bundled METAL binary:
+### 0. Create `.env`
+
+Start by creating a project `.env` file from the template and editing the paths
+for the current system:
+
+```bash
+cp .env.example .env
+```
+
+At minimum, check these values before running any scripts:
+
+- `GWAS_PROJECT_ROOT`
+- `GWAS_ANALYSIS_DIR`
+- `GWAS_GENETICS_DIR`
+- `GWAS_PHENO_FILE`
+- `GWAS_SAMPLESHEET`
+- `GWAS_EXTERNAL_SOMA_RDS`
+- `GWAS_DEPOT_GENETICS_DIR`
+
+The `src/00*` helper scripts source `.env` and use those paths to prepare inputs,
+run Nextflow, and stage final transfer files.
+
+### 1. Set Up the Runtime and Tools
+
+Run `001_source.sh` to create the `nf_master` environment and install the bundled
+METAL binary used by the pipeline:
 
 ```bash
 bash src/001_source.sh
 ```
 
-Create or update the project inputs:
+### 2. Prepare Genetics, Phenotypes, and the Samplesheet
+
+Run the input preparation scripts in order:
 
 ```bash
 bash src/002_data-genetics.sh
@@ -27,7 +54,12 @@ Rscript src/003_data-phenotype.R
 Rscript src/004_samplesheet.R
 ```
 
-Run a small test through the SLURM wrapper:
+These create or update the genetics layout, phenotype files, trait lists, and
+`pipeline/samplesheet.csv`.
+
+### 3. Run the GWAS Pipeline
+
+Run a small test through the SLURM wrapper first:
 
 ```bash
 sbatch src/005_run.sh \
@@ -41,7 +73,7 @@ sbatch src/005_run.sh \
   --meta-study "meta"
 ```
 
-Run all numeric protein traits by passing an empty protein selector:
+Then run all numeric protein traits by passing an empty protein selector:
 
 ```bash
 sbatch src/005_run.sh \
@@ -58,6 +90,46 @@ sbatch src/005_run.sh \
 at the top of that file to change the submit job name, logs, walltime, memory,
 CPUs, or partition.
 
+### 4. Stage Transfer-Ready Results
+
+After the pipeline and across-study meta-analysis have completed, run
+`006_staging.sh` to collect final `meta.tsv.gz` files into a transfer directory:
+
+```bash
+bash src/006_staging.sh \
+  --out analysis/full \
+  --transfer transfer
+```
+
+Use `--dry-run` first to inspect what will be staged:
+
+```bash
+bash src/006_staging.sh --out analysis/full --transfer transfer --dry-run
+```
+
+The staging script writes one transfer file per feature, named
+`<feature>.tsv.gz`, plus a staging manifest in the transfer directory. It can
+also be submitted through SLURM:
+
+```bash
+sbatch src/006_staging.sh --out analysis/full --transfer transfer
+```
+
+### Complete `src/00*` Order
+
+For a fresh run, use the numbered helper scripts in this order:
+
+1. Create and edit `.env` from `.env.example`.
+2. `bash src/001_source.sh`
+3. `bash src/002_data-genetics.sh`
+4. `Rscript src/003_data-phenotype.R`
+5. `Rscript src/004_samplesheet.R`
+6. `sbatch src/005_run.sh ...`
+7. `bash src/006_staging.sh --out <analysis-dir> --transfer <transfer-dir>`
+
+The final staging step should be run only after the desired across-study
+meta-analysis outputs are present under the analysis directory.
+
 ## Inputs
 
 ### `pipeline/samplesheet.csv`
@@ -65,21 +137,19 @@ CPUs, or partition.
 Required columns:
 
 - `study_id`
-- `plink_bfile`: prefix to a PLINK dataset. The pipeline accepts either
-  `<prefix>.pgen/.pvar/.psam` or `<prefix>.bed/.bim/.fam`.
-- `bgen_dir`: optional directory containing `chr<chromosome>.bgen` files. If a
-  matching BGEN exists, REGENIE Step 2 uses it; otherwise the PLINK prefix is
-  used.
-- `sample_file`: sample sheet for the study, usually `.psam`, `.fam`, or `.sam`.
+- `pfile`: prefix to one all-chromosome PLINK2 dataset. The pipeline requires
+  `<prefix>.pgen`, `<prefix>.pvar`, and `<prefix>.psam`.
+- `sample_file`: sample sheet for the study. This must be exactly
+  `<pfile>.psam`.
 - `group_column`: sample or covariate column used for split analyses.
 - `cases_value`: value in `group_column` interpreted as cases.
 
 Example `samplesheet.csv` contents:
 
-| study_id | plink_bfile | bgen_dir | sample_file | group_column | cases_value |
-|---|---|---|---|---|---|
-| `Study_01` | `../my/file/path/genetics/Study_01/study_01_genotypes` | `../my/file/path/genetics/Study_01/bgen` | `../my/file/path/genetics/Study_01/study_01_genotypes.psam` | `PHENO` | `2` |
-| `Study_02` | `../my/file/path/genetics/Study_02/study_02_genotypes` | `../my/file/path/genetics/Study_02/bgen` | `../my/file/path/genetics/Study_02/study_02_genotypes.fam` | `PHENO` | `2` |
+| study_id | pfile | sample_file | group_column | cases_value |
+|---|---|---|---|---|
+| `Study_01` | `../my/file/path/genetics/Study_01/study_01_genotypes` | `../my/file/path/genetics/Study_01/study_01_genotypes.psam` | `PHENO` | `2` |
+| `Study_02` | `../my/file/path/genetics/Study_02/study_02_genotypes` | `../my/file/path/genetics/Study_02/study_02_genotypes.psam` | `PHENO` | `2` |
 
 The default analysis groups are defined in `pipeline/params.yaml`:
 
@@ -167,6 +237,8 @@ Primary helper scripts:
 - `src/004_samplesheet.R`: generate `pipeline/samplesheet.csv` from the phenotype
   file and genetics directory.
 - `src/005_run.sh`: SLURM submission wrapper for the Nextflow pipeline.
+- `src/006_staging.sh`: final staging step that collects across-study
+  meta-analysis outputs into a transfer/upload directory.
 
 ## Pipeline Parameters
 
@@ -264,8 +336,8 @@ LD pruning uses:
 --indep-pairwise 1000kb 1 0.5
 ```
 
-The resulting `step1_input.*` PLINK bed set is used for REGENIE Step 0/1 and for
-PCA. PCA uses `plink2 --pca 10`; the PCs are merged into the group covariate
+The resulting `step1_input.*` PLINK2 pfile set is used for REGENIE Step 0/1 and
+for PCA. PCA uses `plink2 --pca 10`; the PCs are merged into the group covariate
 file.
 
 ### 6. REGENIE Step 0
@@ -322,13 +394,14 @@ chromosome list inside that task.
 Key settings:
 
 - `--step 2`
+- `--pgen <pfile>`
 - `--qt`
 - `--gz`
 - `--bsize <regenie_bsize_step2>`
 - `--chr <chromosome>`
 
-If `bgen_dir/chrN.bgen` exists, Step 2 uses that BGEN plus `sample_file`.
-Otherwise it uses the PLINK prefix from `plink_bfile`.
+Step 2 reads the same all-chromosome PLINK2 prefix for every configured
+chromosome and uses `--chr <chromosome>` to write chromosome-specific outputs.
 
 Outputs:
 

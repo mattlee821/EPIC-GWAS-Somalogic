@@ -9,18 +9,18 @@ process REGENIE_STEP0 {
   }
 
   input:
-  tuple val(study_id), val(group), path(step1_bed), path(step1_bim), path(step1_fam), path(pheno_file), path(cov_file), val(bsize)
+  tuple val(study_id), val(group), path(step1_pgen), path(step1_pvar), path(step1_psam), path(pheno_file), path(cov_file), val(bsize)
 
   output:
   tuple val(study_id), val(group), path("regenie_step0.master"), path("regenie_step0_job*.snplist"), path("regenie_step0_job*_l0_*")
 
   script:
-  def bfile_prefix = step1_bed.baseName
+  def pfile_prefix = step1_pgen.baseName
   """
   # REGENIE step 0 must write its master file in the shared work directory
   # because the master records absolute paths to level-0 shard outputs.
   bash ${projectDir}/bin/run_regenie_step0.sh \\
-    --step1_bfile ${bfile_prefix} \\
+    --step1_pfile ${pfile_prefix} \\
     --pheno_file ${pheno_file} \\
     --cov_file ${cov_file} \\
     --study ${study_id} \\

@@ -10,6 +10,7 @@ process VALIDATE_INPUTS {
   val include_studies
   val include_proteins
   val covariates
+  val chromosomes
 
   output:
   path "validation_report.txt"
@@ -23,6 +24,7 @@ process VALIDATE_INPUTS {
     --include_studies "${include_studies}" \\
     --include_proteins "${include_proteins}" \\
     --covariates "${covariates}" \\
+    --chromosomes "${chromosomes}" \\
     --outdir .
   """
 }

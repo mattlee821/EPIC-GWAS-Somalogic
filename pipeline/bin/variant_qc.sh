@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-bfile=""
+pfile=""
 keep=""
 study=""
 maf=""
@@ -11,7 +11,7 @@ outdir=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --bfile) bfile="$2"; shift 2 ;;
+    --pfile) pfile="$2"; shift 2 ;;
     --keep) keep="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
     --maf) maf="$2"; shift 2 ;;
@@ -22,27 +22,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$bfile" || -z "$keep" || -z "$study" || -z "$maf" || -z "$hwe" || -z "$geno" || -z "$outdir" ]]; then
-  echo "Usage: $0 --bfile <val> --keep <val> --study <val> --maf <val> --hwe <val> --geno <val> --outdir <val>"
+if [[ -z "$pfile" || -z "$keep" || -z "$study" || -z "$maf" || -z "$hwe" || -z "$geno" || -z "$outdir" ]]; then
+  echo "Usage: $0 --pfile <prefix> --keep <val> --study <val> --maf <val> --hwe <val> --geno <val> --outdir <val>"
   exit 1
 fi
 
-# Detect bfile vs pfile
-plink_flag="--bfile"
-if [[ -f "${bfile}.pgen" ]]; then
-  plink_flag="--pfile"
-elif [[ ! -f "${bfile}.bed" ]]; then
-  echo "ERROR: Neither ${bfile}.pgen nor ${bfile}.bed found."
-  exit 1
-fi
+for ext in pgen pvar psam; do
+  if [[ ! -f "${pfile}.${ext}" ]]; then
+    echo "ERROR: Missing PLINK2 input file: ${pfile}.${ext}" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$outdir"
 log_file="${outdir}/variant_qc.log"
 exec > >(tee -a "$log_file") 2>&1
 
-echo "Starting variant QC for $study using $plink_flag $bfile..."
+echo "Starting variant QC for $study using PLINK2 prefix $pfile..."
 
-plink2 $plink_flag "$bfile" \
+plink2 --pfile "$pfile" \
   --keep "$keep" \
   --maf "$maf" \
   --hwe "$hwe" \
