@@ -2,7 +2,7 @@
 set -euo pipefail
 
 POSITIONAL_ARGS=()
-bfile=""
+pfile=""
 study=""
 mind=""
 king=""
@@ -11,7 +11,7 @@ outdir=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --bfile) bfile="$2"; shift 2 ;;
+    --pfile) pfile="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
     --mind) mind="$2"; shift 2 ;;
     --king) king="$2"; shift 2 ;;
@@ -21,14 +21,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Detect bfile vs pfile
-plink_flag="--bfile"
-if [[ -f "${bfile}.pgen" ]]; then
-  plink_flag="--pfile"
-elif [[ ! -f "${bfile}.bed" ]]; then
-  echo "ERROR: Neither ${bfile}.pgen nor ${bfile}.bed found."
+if [[ -z "$pfile" || -z "$study" || -z "$mind" || -z "$king" || -z "$outdir" ]]; then
+  echo "Usage: $0 --pfile <prefix> --study <val> --mind <val> --king <val> --outdir <val> [--keep <file>]" >&2
   exit 1
 fi
+
+for ext in pgen pvar psam; do
+  if [[ ! -f "${pfile}.${ext}" ]]; then
+    echo "ERROR: Missing PLINK2 input file: ${pfile}.${ext}" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$outdir"
 log_file="${outdir}/sample_qc.log"
@@ -36,6 +39,7 @@ exec > >(tee -a "$log_file") 2>&1
 
 echo "=========================================="
 echo " Starting sample QC for $study"
+echo " Input PLINK2 prefix: $pfile"
 echo "=========================================="
 
 KEEP_ARG=""
@@ -46,7 +50,7 @@ fi
 
 # Step 1: Mind filter
 echo ">>> Step 1: Call rate filter (--mind $mind)"
-plink2 $plink_flag "$bfile" \
+plink2 --pfile "$pfile" \
   $KEEP_ARG \
   --mind "$mind" \
   --make-just-fam \
@@ -54,12 +58,12 @@ plink2 $plink_flag "$bfile" \
 
 # Step 2: Heterozygosity
 echo ">>> Step 2: Heterozygosity check"
-plink2 $plink_flag "$bfile" \
+plink2 --pfile "$pfile" \
   --keep "${outdir}/mind_pass.fam" \
   --indep-pairwise 200 50 0.25 \
   --out "${outdir}/het_ld_temp"
 
-plink2 $plink_flag "$bfile" \
+plink2 --pfile "$pfile" \
   --keep "${outdir}/mind_pass.fam" \
   --extract "${outdir}/het_ld_temp.prune.in" \
   --het \
@@ -128,7 +132,7 @@ EOF
 
 # Step 3: King cutoff
 echo ">>> Step 3: Relatedness filter (--king-cutoff $king)"
-plink2 $plink_flag "$bfile" \
+plink2 --pfile "$pfile" \
   --keep "${outdir}/het_pass.txt" \
   --king-cutoff "$king" \
   --out "${outdir}/king_pass"

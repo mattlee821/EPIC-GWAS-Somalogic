@@ -1,25 +1,32 @@
 #!/bin/bash
 set -euo pipefail
 
-step1_bfile=""
+step1_pfile=""
 outdir=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --bfile) step1_bfile="$2"; shift 2 ;;
+    --pfile) step1_pfile="$2"; shift 2 ;;
     --outdir) outdir="$2"; shift 2 ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
 done
 
-if [[ -z "$step1_bfile" || -z "$outdir" ]]; then
-  echo "Usage: $0 --bfile <step1_input> --outdir <outdir>"
+if [[ -z "$step1_pfile" || -z "$outdir" ]]; then
+  echo "Usage: $0 --pfile <step1_input> --outdir <outdir>"
   exit 1
 fi
 
+for ext in pgen pvar psam; do
+  if [[ ! -f "${step1_pfile}.${ext}" ]]; then
+    echo "ERROR: Missing PLINK2 input file: ${step1_pfile}.${ext}" >&2
+    exit 1
+  fi
+done
+
 mkdir -p "$outdir"
 
-plink2 --bfile "$step1_bfile" \
+plink2 --pfile "$step1_pfile" \
   --pca 10 \
   --out "${outdir}/pca"
 

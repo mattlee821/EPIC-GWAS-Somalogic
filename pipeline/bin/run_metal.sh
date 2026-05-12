@@ -165,6 +165,10 @@ format_generic_input() {
   fi
 }
 
+input_data_rows=0
+n_summary="${tmpdir}/n_summary.tsv"
+printf 'ID\tN\n' > "$n_summary"
+
 for i in "${!FILES[@]}"; do
   f="${FILES[$i]}"
   bn=$(basename "$f")
@@ -182,8 +186,38 @@ for i in "${!FILES[@]}"; do
     format_generic_input "$f" "$out_txt" "$compressed"
   fi
 
+  data_rows=$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' "$out_txt")
+  if (( data_rows == 0 )); then
+    echo "WARNING: METAL input has no variant rows after formatting: $f" >> "${outdir}/meta.log"
+  fi
+  input_data_rows=$((input_data_rows + data_rows))
+
   echo "$out_txt" >> "$input_list"
 done
+
+if (( input_data_rows == 0 )); then
+  echo "ERROR: No variant rows were available for METAL after formatting inputs for ${protein_id} (${group})." >> "${outdir}/meta.log"
+  exit 1
+fi
+
+n_rows="${tmpdir}/n_rows.tsv"
+: > "$n_rows"
+while read -r f; do
+  awk 'BEGIN { FS=OFS="\t" }
+    NR == 1 { next }
+    NF > 0 && $1 != "" {
+      n = $8 + 0
+      if (n > 0) print $1, n
+    }' "$f" >> "$n_rows"
+done < "$input_list"
+
+awk 'BEGIN { FS=OFS="\t" }
+  NF > 0 {
+    total[$1] += $2
+  }
+  END {
+    for (id in total) print id, total[id]
+  }' "$n_rows" >> "$n_summary"
 
 metal_script="${tmpdir}/metal_script.txt"
 cat > "$metal_script" <<EOF
@@ -211,7 +245,7 @@ done < "$input_list"
 
 cat >> "$metal_script" <<EOF
 OUTFILE ${outdir}/meta .tbl
-ANALYZE
+ANALYZE HETEROGENEITY
 QUIT
 EOF
 
@@ -239,7 +273,9 @@ python3 "$metal_qc_script" \
   --protein_id "$protein_id" \
   --study "$study" \
   --group "$group" \
-  --outdir "$outdir"
+  --outdir "$outdir" \
+  --n_file "$n_summary" \
+  --require_heterogeneity
 
 rm -f "$tbl_file"
 

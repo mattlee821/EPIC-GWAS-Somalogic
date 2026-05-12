@@ -71,7 +71,7 @@ option_list <- list(
               default=get_env("GWAS_SAMPLESHEET", "pipeline/samplesheet.csv"),
               help="Output path for the samplesheet.csv"),
   make_option(c("--group_col"), type="character", default="PHENO",
-              help="Column name for split analyses (e.g., case/control status). Default uses PHENO from .fam/.psam."),
+              help="Column name for split analyses (e.g., case/control status). Default uses PHENO from .psam."),
   make_option(c("--cases_val"), type="character", default="2",
               help="Value in group_col mapping to 'cases' (default: 2)")
 )
@@ -105,32 +105,17 @@ for (study in unique_studies) {
     study_dir <- file.path(opt$genetics_dir, study)
     
     if (dir.exists(study_dir)) {
-        # Search for pgen or bed files within the study
         pgen_files <- list.files(study_dir, pattern="\\.pgen$", full.names=TRUE, recursive=TRUE)
-        bed_files <- list.files(study_dir, pattern="\\.bed$", full.names=TRUE, recursive=TRUE)
-        
-        genetic_hits <- if (length(pgen_files) > 0) pgen_files else bed_files
-        
-        if (length(genetic_hits) > 0) {
-            # Use the first hit
-            hit_path <- genetic_hits[1]
-            ext_pattern <- if (length(pgen_files) > 0) "\\.pgen$" else "\\.bed$"
-            pfile_prefix <- sub(ext_pattern, "", hit_path)
-            
-            # Check for BGEN directory
-            bgen_dir <- file.path(study_dir, "bgen")
-            if (!dir.exists(bgen_dir)) {
-                bgen_dir <- file.path(dirname(pfile_prefix), "bgen")
-            }
-            
-            # The sample file is either .psam or .fam/.sam
-            sample_file <- if (length(pgen_files) > 0) paste0(pfile_prefix, ".psam") else paste0(pfile_prefix, ".fam")
-            if (!file.exists(sample_file)) {
-                fallback_fam <- paste0(pfile_prefix, ".fam")
-                if (file.exists(fallback_fam)) {
-                    sample_file <- fallback_fam
-                }
-            }
+
+        pfile_prefixes <- sub("\\.pgen$", "", pgen_files)
+        complete_prefixes <- pfile_prefixes[
+            file.exists(paste0(pfile_prefixes, ".pvar")) &
+            file.exists(paste0(pfile_prefixes, ".psam"))
+        ]
+
+        if (length(complete_prefixes) == 1) {
+            pfile_prefix <- complete_prefixes[1]
+            sample_file <- paste0(pfile_prefix, ".psam")
             
             # Function to ensure absolute paths even for non-existent files/prefixes
             get_abs_path <- function(p) {
@@ -143,48 +128,46 @@ for (study in unique_studies) {
             # Determine group column for case/control split
             group_col_use <- opt$group_col
             if (group_col_use != "") {
-                if (grepl("\\.fam$|\\.sam$", sample_file)) {
-                    # FAM/SAM has PHENO as 6th column by definition
-                    if (group_col_use != "PHENO") {
-                        cat("WARNING: sample_file is .fam/.sam but group_col is not PHENO. Using PHENO.\n")
-                        group_col_use <- "PHENO"
-                    }
-                } else if (grepl("\\.psam$", sample_file)) {
-                    if (file.exists(sample_file)) {
-                        hdr_cols <- read_sample_header(sample_file)
-                        group_col_found <- group_col_use %in% hdr_cols
+                hdr_cols <- read_sample_header(sample_file)
+                group_col_found <- group_col_use %in% hdr_cols
 
-                        if (!group_col_found && identical(group_col_use, "PHENO") && "PHENO1" %in% hdr_cols) {
-                            group_col_found <- TRUE
-                        }
+                if (!group_col_found && identical(group_col_use, "PHENO") && "PHENO1" %in% hdr_cols) {
+                    group_col_found <- TRUE
+                }
 
-                        if (!group_col_found) {
-                            cat("WARNING: group_col '", group_col_use, "' not found in ", sample_file, ". Disabling split.\n", sep="")
-                            group_col_use <- ""
-                        }
-                    } else {
-                        cat("WARNING: sample_file not found to validate group_col. Disabling split.\n")
-                        group_col_use <- ""
-                    }
+                if (!group_col_found) {
+                    cat("WARNING: group_col '", group_col_use, "' not found in ", sample_file, ". Disabling split.\n", sep="")
+                    group_col_use <- ""
                 }
             }
 
             # Record entry
             samplesheet_rows[[study]] <- data.frame(
               study_id = study,
-              plink_bfile = get_abs_path(pfile_prefix),
-              bgen_dir = get_abs_path(bgen_dir),
+              pfile = get_abs_path(pfile_prefix),
               sample_file = get_abs_path(sample_file),
               group_column = group_col_use,
               cases_value = opt$cases_val,
               stringsAsFactors = FALSE
             )
-            cat("Matched genetic data for study:", study, " (Format:", if(length(pgen_files)>0) "PGEN" else "BED", ")\n")
+            cat("Matched PLINK2 data for study:", study, "\n")
+        } else if (length(complete_prefixes) > 1) {
+            stop(
+              "Multiple complete PLINK2 prefixes found for study ", study, ":\n",
+              paste(complete_prefixes, collapse = "\n"),
+              "\nEach study must have exactly one all-chromosome PLINK2 prefix."
+            )
         } else {
-            cat("WARNING: No .pgen or .bed file found for study", study, "in", study_dir, "\n")
+            if (length(pgen_files) > 0) {
+                stop(
+                  "No complete PLINK2 triple found for study ", study,
+                  ". Found .pgen file(s), but each prefix must also have .pvar and .psam."
+                )
+            }
+            stop("No PLINK2 .pgen file found for study ", study, " in ", study_dir)
         }
     } else {
-        cat("WARNING: Directory not found for study:", study_dir, "\n")
+        stop("Directory not found for study: ", study_dir)
     }
 }
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-bfile=""
+pfile=""
 keep=""
 extract=""
 study=""
@@ -12,7 +12,7 @@ outdir=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --bfile) bfile="$2"; shift 2 ;;
+    --pfile) pfile="$2"; shift 2 ;;
     --keep) keep="$2"; shift 2 ;;
     --extract) extract="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
@@ -24,31 +24,34 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Detect bfile vs pfile
-plink_flag="--bfile"
-if [[ -f "${bfile}.pgen" ]]; then
-  plink_flag="--pfile"
-elif [[ ! -f "${bfile}.bed" ]]; then
-  echo "ERROR: Neither ${bfile}.pgen nor ${bfile}.bed found."
+if [[ -z "$pfile" || -z "$keep" || -z "$extract" || -z "$study" || -z "$window" || -z "$step" || -z "$r2" || -z "$outdir" ]]; then
+  echo "Usage: $0 --pfile <prefix> --keep <file> --extract <file> --study <val> --window <kb> --step <val> --r2 <val> --outdir <dir>" >&2
   exit 1
 fi
+
+for ext in pgen pvar psam; do
+  if [[ ! -f "${pfile}.${ext}" ]]; then
+    echo "ERROR: Missing PLINK2 input file: ${pfile}.${ext}" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$outdir"
 log_file="${outdir}/ld_pruning.log"
 exec > >(tee -a "$log_file") 2>&1
 
-echo "LD Pruning for $study using $plink_flag $bfile..."
+echo "LD Pruning for $study using PLINK2 prefix $pfile..."
 
-plink2 $plink_flag "$bfile" \
+plink2 --pfile "$pfile" \
   --keep "$keep" \
   --extract "$extract" \
   --indep-pairwise "${window}kb" "$step" "$r2" \
   --out "${outdir}/ld_pruned"
 
-plink2 $plink_flag "$bfile" \
+plink2 --pfile "$pfile" \
   --keep "$keep" \
   --extract "${outdir}/ld_pruned.prune.in" \
-  --make-bed \
+  --make-pgen \
   --out "${outdir}/step1_input"
 
 echo "Pruned step1 input files written to ${outdir}/step1_input.*"

@@ -1,8 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-bgen_file=""
-bgen_dir=""
 pgen_prefix=""
 sample_file=""
 pheno_file=""
@@ -16,8 +14,6 @@ outdir=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --bgen_file) bgen_file="$2"; shift 2 ;;
-    --bgen_dir) bgen_dir="$2"; shift 2 ;;
     --pfile) pgen_prefix="$2"; shift 2 ;;
     --sample_file) sample_file="$2"; shift 2 ;;
     --pheno_file) pheno_file="$2"; shift 2 ;;
@@ -34,8 +30,28 @@ done
 
 mkdir -p "$outdir"
 
+if [[ -z "$pgen_prefix" || -z "$sample_file" || -z "$pheno_file" || -z "$cov_file" || -z "$pred_list" || -z "$study" || -z "$group" || -z "$bsize" || -z "$outdir" ]]; then
+    echo "Usage: $0 --pfile <prefix> --sample_file <psam> --pheno_file <file> --cov_file <file> --pred_list <file> --study <id> --group <group> --chromosomes <list> --bsize <val> --outdir <dir>" >&2
+    exit 1
+fi
+
 if [[ -z "$chromosomes" ]]; then
     echo "ERROR: At least one chromosome must be provided via --chromosomes"
+    exit 1
+fi
+
+for ext in pgen pvar psam; do
+    if [[ ! -f "${pgen_prefix}.${ext}" ]]; then
+        echo "ERROR: Missing PLINK2 input file: ${pgen_prefix}.${ext}" >&2
+        exit 1
+    fi
+done
+
+expected_sample_file="${pgen_prefix}.psam"
+if [[ "$sample_file" != "$expected_sample_file" ]]; then
+    echo "ERROR: sample_file must match the pfile .psam path." >&2
+    echo "Expected: $expected_sample_file" >&2
+    echo "Observed: $sample_file" >&2
     exit 1
 fi
 
@@ -74,34 +90,63 @@ PY
     pred_list="${localized_pred_list}"
 fi
 
-if [[ -n "$pgen_prefix" ]]; then
-    # REGENIE 4.x check: It requires #FID as 1st col and IID as 2nd col.
-    ORIG_PSAM="${pgen_prefix}.psam"
-    header=$(head -n 1 "$ORIG_PSAM")
+# REGENIE 4.x requires #FID as the first column and IID as the second column.
+ORIG_PSAM="${pgen_prefix}.psam"
+header=$(grep -v '^##' "$ORIG_PSAM" | head -n 1)
 
-    if [[ "$header" != *"#FID"* ]]; then
-        echo ">>> Fixing PSAM header for REGENIE compatibility..."
+if [[ "$header" != \#FID$'\t'IID* && "$header" != "#FID IID"* ]]; then
+    echo ">>> Fixing PSAM header for REGENIE compatibility..."
 
-        # Create a new prefix in the output directory
-        FIXED_PREFIX="${outdir}/fixed_gen"
+    FIXED_PREFIX="${outdir}/fixed_gen"
 
-        # 1. Create fixed PSAM with strict #FID IID format
-        # If the input starts with #IID, we strip the # from IID and prepend #FID
-        awk 'BEGIN {OFS="\t"} 
-             NR==1 {
-                sub(/^#/,"",$1); 
-                print "#FID", "IID", "SEX", "PHENO"
-             } 
-             NR>1 {
-                print "0", $1, $2, $3
-             }' "$ORIG_PSAM" > "${FIXED_PREFIX}.psam"
+    python3 - "$ORIG_PSAM" "${FIXED_PREFIX}.psam" <<'PY'
+import sys
 
-        # 2. Symlink the large data files to this new prefix
-        ln -sf "$(readlink -f ${pgen_prefix}.pgen)" "${FIXED_PREFIX}.pgen"
-        ln -sf "$(readlink -f ${pgen_prefix}.pvar)" "${FIXED_PREFIX}.pvar"
+src_path, dst_path = sys.argv[1:]
 
-        pgen_prefix="${FIXED_PREFIX}"
-    fi
+with open(src_path, "r", encoding="utf-8") as src:
+    raw_lines = [line.rstrip("\n") for line in src if line.strip()]
+
+comment_lines = [line for line in raw_lines if line.startswith("##")]
+data_lines = [line for line in raw_lines if not line.startswith("##")]
+
+if not data_lines:
+    raise SystemExit(f"No PSAM header found in {src_path}")
+
+header = data_lines[0].split()
+header[0] = header[0].lstrip("#")
+upper = [col.upper() for col in header]
+
+if "IID" not in upper:
+    raise SystemExit(f"PSAM file {src_path} does not contain an IID column")
+
+iid_idx = upper.index("IID")
+fid_idx = upper.index("FID") if "FID" in upper else None
+remaining_indices = [
+    idx for idx in range(len(header))
+    if idx != iid_idx and idx != fid_idx
+]
+
+out_header = ["#FID", "IID"] + [header[idx] for idx in remaining_indices]
+
+with open(dst_path, "w", encoding="utf-8") as dst:
+    for line in comment_lines:
+        dst.write(line + "\n")
+    dst.write("\t".join(out_header) + "\n")
+    for line in data_lines[1:]:
+        fields = line.split()
+        if len(fields) < len(header):
+            raise SystemExit(f"Malformed PSAM row in {src_path}: {line}")
+        fid = fields[fid_idx] if fid_idx is not None else "0"
+        iid = fields[iid_idx]
+        out_fields = [fid, iid] + [fields[idx] for idx in remaining_indices]
+        dst.write("\t".join(out_fields) + "\n")
+PY
+
+    ln -sf "$(readlink -f "${pgen_prefix}.pgen")" "${FIXED_PREFIX}.pgen"
+    ln -sf "$(readlink -f "${pgen_prefix}.pvar")" "${FIXED_PREFIX}.pvar"
+
+    pgen_prefix="${FIXED_PREFIX}"
 fi
 
 IFS=',' read -r -a chr_array <<< "$chromosomes"
@@ -113,16 +158,7 @@ for chr in "${chr_array[@]}"; do
     log_file="${outdir}/step2_chr${chr}.log"
     cmd=(regenie --step 2 --threads "${threads}")
 
-    if [[ -n "$bgen_dir" ]] && [[ -f "${bgen_dir}/chr${chr}.bgen" ]]; then
-        cmd+=(--bgen "${bgen_dir}/chr${chr}.bgen" --sample "${sample_file}")
-    elif [[ -n "$bgen_file" ]]; then
-        cmd+=(--bgen "${bgen_file}" --sample "${sample_file}")
-    elif [[ -n "$pgen_prefix" ]]; then
-        cmd+=(--pgen "${pgen_prefix}")
-    else
-        echo "ERROR: No genotype input available for chromosome ${chr}" | tee "$log_file"
-        exit 1
-    fi
+    cmd+=(--pgen "${pgen_prefix}")
 
     cmd+=(
         --phenoFile "${pheno_file}"

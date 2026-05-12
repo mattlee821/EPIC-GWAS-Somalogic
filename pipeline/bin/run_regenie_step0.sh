@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-step1_bfile=""
+step1_pfile=""
 pheno_file=""
 cov_file=""
 study=""
@@ -11,7 +11,7 @@ outdir=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --step1_bfile) step1_bfile="$2"; shift 2 ;;
+    --step1_pfile) step1_pfile="$2"; shift 2 ;;
     --pheno_file) pheno_file="$2"; shift 2 ;;
     --cov_file) cov_file="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
@@ -20,6 +20,18 @@ while [[ $# -gt 0 ]]; do
     --outdir) outdir="$2"; shift 2 ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
+done
+
+if [[ -z "$step1_pfile" || -z "$pheno_file" || -z "$cov_file" || -z "$study" || -z "$group" || -z "$bsize" || -z "$outdir" ]]; then
+  echo "Usage: $0 --step1_pfile <prefix> --pheno_file <file> --cov_file <file> --study <id> --group <group> --bsize <val> --outdir <dir>" >&2
+  exit 1
+fi
+
+for ext in pgen pvar psam; do
+  if [[ ! -f "${step1_pfile}.${ext}" ]]; then
+    echo "ERROR: Missing PLINK2 input file: ${step1_pfile}.${ext}" >&2
+    exit 1
+  fi
 done
 
 mkdir -p "$outdir"
@@ -41,7 +53,7 @@ split_log="${outdir}/step0_split.log"
 split_cmd=(
   regenie
   --step 1
-  --bed "${step1_bfile}"
+  --pgen "${step1_pfile}"
   --phenoFile "${pheno_file}"
   --covarFile "${cov_file}"
   --bsize "${bsize}"
@@ -65,7 +77,7 @@ for job_id in $(seq 1 "${l0_jobs}"); do
   run_l0_cmd=(
     regenie
     --step 1
-    --bed "${step1_bfile}"
+    --pgen "${step1_pfile}"
     --phenoFile "${pheno_file}"
     --covarFile "${cov_file}"
     --bsize "${bsize}"

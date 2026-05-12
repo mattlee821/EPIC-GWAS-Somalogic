@@ -165,15 +165,6 @@ def read_sample_file(path: str | Path) -> pd.DataFrame:
 
     if suffix == ".psam":
         df = read_psam_file(file_path)
-    elif suffix in {".fam", ".sam"}:
-        df = pd.read_csv(
-            file_path,
-            sep=r"\s+",
-            engine="python",
-            header=None,
-            names=["FID", "IID", "PID", "MID", "SEX", "PHENO"],
-            dtype=str,
-        )
     else:
         df = read_table_auto(file_path, dtype=str)
 
@@ -182,7 +173,7 @@ def read_sample_file(path: str | Path) -> pd.DataFrame:
 
     # PLINK2 sample files sometimes expose the default phenotype column as
     # PHENO1 rather than PHENO. Normalize it so downstream grouping logic can
-    # consistently request PHENO across .fam/.sam/.psam inputs.
+    # consistently request PHENO across .psam inputs.
     phenotype_column = resolve_column_name(df.columns, "PHENO")
     if phenotype_column is not None and phenotype_column != "PHENO":
         df = df.rename(columns={phenotype_column: "PHENO"})

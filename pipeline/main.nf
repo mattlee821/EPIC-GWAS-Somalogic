@@ -32,7 +32,8 @@ workflow {
         cov_file,
         params.include_studies,
         params.include_proteins,
-        params.covariates
+        params.covariates,
+        params.chromosomes.collect { it.toString() }.join(',')
     )
 
     // 2. Load samplesheet and create study channel
@@ -89,14 +90,14 @@ workflow {
     PREPARE_COVARIATES(ch_cov_inputs)
 
     // 4. Genetic QC per study (independent of analysis groups)
-    ch_studies.map { row -> tuple(row.study_id, row.plink_bfile, params.mind, params.king_cutoff) } | SAMPLE_QC
+    ch_studies.map { row -> tuple(row.study_id, row.pfile, params.mind, params.king_cutoff) } | SAMPLE_QC
 
-    // combine SAMPLE_QC (sid, qc_pass_samples.txt) with original bfile
-    ch_studies_with_qc = ch_studies.map { row -> tuple(row.study_id, row.plink_bfile) }
-                                   .join(SAMPLE_QC.out, by: 0) // [sid, bfile, pass_samples]
+    // combine SAMPLE_QC (sid, qc_pass_samples.txt) with original pfile
+    ch_studies_with_qc = ch_studies.map { row -> tuple(row.study_id, row.pfile) }
+                                   .join(SAMPLE_QC.out, by: 0) // [sid, pfile, pass_samples]
 
-    // VARIANT_QC takes [sid, bfile, qc_samples, maf, hwe, geno]
-    VARIANT_QC(ch_studies_with_qc.map { sid, bfile, qcs -> tuple(sid, bfile, qcs, params.maf, params.hwe, params.geno) })
+    // VARIANT_QC takes [sid, pfile, qc_samples, maf, hwe, geno]
+    VARIANT_QC(ch_studies_with_qc.map { sid, pfile, qcs -> tuple(sid, pfile, qcs, params.maf, params.hwe, params.geno) })
 
     // Stage study-level QC outputs into each group directory
     STAGE_SAMPLE_QC(
@@ -120,7 +121,7 @@ workflow {
     LD_PRUNING(ch_for_ld)
 
     // 4c. Compute PCs on the step1 input and merge into covariates
-    PCA(LD_PRUNING.out.map { sid, grp, bed, bim, fam -> tuple(sid, grp, bed, bim, fam) })
+    PCA(LD_PRUNING.out.map { sid, grp, pgen, pvar, psam -> tuple(sid, grp, pgen, pvar, psam) })
 
     def cov_for_pcs = PREPARE_COVARIATES.out.map { sid, grp, cov -> tuple("${sid}_${grp}", sid, grp, cov) }
     def pcs_for_cov = PCA.out.map { sid, grp, pvec, pval -> tuple("${sid}_${grp}", pvec, pval) }
@@ -149,18 +150,18 @@ workflow {
     def regenie_key = { sid, grp -> "${sid}__${grp}" }
     def regenie_full = PREPARE_PHENOTYPES.out[0].map { sid, grp, feature_files, full, manifest, keep -> tuple(regenie_key(sid, grp), full) }
     def regenie_cov = ADD_PCS.out[0].map { sid, grp, cov -> tuple(regenie_key(sid, grp), cov) }
-    def regenie_ld = LD_PRUNING.out.map { sid, grp, bed, bim, fam -> tuple(regenie_key(sid, grp), sid, grp, bed, bim, fam) }
+    def regenie_ld = LD_PRUNING.out.map { sid, grp, pgen, pvar, psam -> tuple(regenie_key(sid, grp), sid, grp, pgen, pvar, psam) }
 
     def regenie_shared = regenie_ld
         .join(regenie_full, by: 0)
         .join(regenie_cov, by: 0)
-        .map { key, sid, grp, bed, bim, fam, full, cov ->
-            tuple(key, sid, grp, bed, bim, fam, full, cov)
+        .map { key, sid, grp, pgen, pvar, psam, full, cov ->
+            tuple(key, sid, grp, pgen, pvar, psam, full, cov)
         }
 
     step0_inputs = regenie_shared
-        .map { key, sid, grp, bed, bim, fam, full, cov ->
-            tuple(sid, grp, bed, bim, fam, full, cov, params.regenie_bsize_step1)
+        .map { key, sid, grp, pgen, pvar, psam, full, cov ->
+            tuple(sid, grp, pgen, pvar, psam, full, cov, params.regenie_bsize_step1)
         }
 
     REGENIE_STEP0(step0_inputs)
@@ -172,10 +173,10 @@ workflow {
     }
 
     step1_inputs = pheno_prep
-        .combine(regenie_shared.map { key, sid, grp, bed, bim, fam, full, cov -> tuple(key, bed, bim, fam, full, cov) }, by: 0)
+        .combine(regenie_shared.map { key, sid, grp, pgen, pvar, psam, full, cov -> tuple(key, pgen, pvar, psam, full, cov) }, by: 0)
         .combine(step0_master, by: 0)
-        .map { key, sid, grp, protein_id, bed, bim, fam, full, cov, master_file ->
-            tuple(sid, grp, protein_id, bed, bim, fam, full, cov, master_file, params.regenie_bsize_step1)
+        .map { key, sid, grp, protein_id, pgen, pvar, psam, full, cov, master_file ->
+            tuple(sid, grp, protein_id, pgen, pvar, psam, full, cov, master_file, params.regenie_bsize_step1)
         }
 
     REGENIE_STEP1(step1_inputs)
@@ -185,7 +186,7 @@ workflow {
     def ch_step1 = REGENIE_STEP1.out.map { sid, grp, protein_id, pred, loco -> tuple("${sid}__${grp}__${protein_id}", pred, loco) }
     def ch_pheno_step2 = pheno_features.map { sid, grp, protein_id, pheno_file -> tuple("${sid}__${grp}__${protein_id}", sid, grp, protein_id, pheno_file) }
     def ch_cov_step2 = ADD_PCS.out[0].map { sid, grp, cov -> tuple("${sid}_${grp}", cov) }
-    def ch_genotype = ch_studies.map { r -> tuple(r.study_id, r.plink_bfile, r.bgen_dir, r.sample_file) }
+    def ch_genotype = ch_studies.map { r -> tuple(r.study_id, r.pfile, r.sample_file) }
 
     step2_setup = ch_pheno_step2
         .join(ch_step1, by: 0)
@@ -193,8 +194,8 @@ workflow {
         .combine(ch_cov_step2, by: 0)
         .map { key, sid, grp, protein_id, pheno_file, pred, loco, cov -> tuple(sid, grp, protein_id, pheno_file, pred, loco, cov) }
         .combine(ch_genotype, by: 0)
-        .map { sid, grp, protein_id, pheno_file, pred, loco, cov, pbfile, bgendir, samp ->
-            tuple(sid, grp, protein_id, pbfile, bgendir, samp, chromosome_list, pheno_file, cov, pred, loco, params.regenie_bsize_step2)
+        .map { sid, grp, protein_id, pheno_file, pred, loco, cov, pfile, samp ->
+            tuple(sid, grp, protein_id, pfile, samp, chromosome_list, pheno_file, cov, pred, loco, params.regenie_bsize_step2)
         }
 
     REGENIE_STEP2(step2_setup)
